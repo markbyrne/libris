@@ -418,7 +418,11 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             else click.style("○  OpenLibrary", dim=True)
         click.echo(f"  APIs       {g_label}     {ol_label}")
         click.echo(click.style(
-            "             Change at the Source prompt · options: all, google, openlibrary",
+            "             Change at the Source prompt  ·  libris rematch --id <id> --source <option>",
+            dim=True,
+        ))
+        click.echo(click.style(
+            "             or in query prompt  ·  /api <option>  ·  options: all, google, openlibrary",
             dim=True,
         ))
         click.echo()
@@ -435,10 +439,29 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
 
         click.echo(_hr())
         query_str = click.prompt("  Query", default=current_query)
+
+        # ── Handle /api slash command ─────────────────────────────────
+        _API_CHOICES = ("all", "google", "openlibrary")
+        if query_str.strip().lower().startswith("/api"):
+            parts = query_str.strip().split()
+            if len(parts) == 2 and parts[1].lower() in _API_CHOICES:
+                current_source = parts[1].lower()
+                click.echo()
+                click.echo(f"  Source updated to: {current_source}")
+                click.echo()
+            else:
+                click.echo()
+                click.echo(click.style(
+                    f"  Usage: /api <option>  ·  options: {', '.join(_API_CHOICES)}",
+                    fg="yellow",
+                ))
+                click.echo()
+            continue  # Re-render the panel with the new source (no search)
+
         source_str = click.prompt(
             "  Source",
             default=current_source,
-            type=click.Choice(["all", "google", "openlibrary"], case_sensitive=False),
+            type=click.Choice(list(_API_CHOICES), case_sensitive=False),
         )
         click.echo()
         click.echo("  Searching…")
