@@ -272,6 +272,34 @@ def review_accept(
     sys.exit(1 if any_failed else 0)
 
 
+def _calibredb_list(query: str, config) -> str:
+    """Run calibredb list with *query* and return the formatted output string.
+
+    Works in both local and docker modes.  Returns an empty string if no
+    books match; raises SystemExit on calibredb error.
+    """
+    if config.calibre.mode == "docker":
+        cmd = [
+            "docker", "exec", config.calibre.docker_container,
+            "calibredb", "list",
+            "--search", query,
+            "--fields", "id,title,authors",
+        ]
+    else:
+        cmd = [
+            "calibredb", "list",
+            "--search", query,
+            "--fields", "id,title,authors",
+            "--with-library", str(config.calibre.library_path),
+        ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo(f"❌ calibredb error: {result.stderr.strip()}", err=True)
+        sys.exit(1)
+    return result.stdout.strip()
+
+
 @main.command("search")
 @click.argument("query")
 @_CONFIG_OPTION
@@ -289,38 +317,29 @@ def search(query: str, config_path: Optional[Path]) -> None:
     """
     path = _resolve_config(config_path)
     config = load_config(path)
-
-    if config.calibre.mode != "local":
-        click.echo("⚠ 'libris search' currently supports local mode only.", err=True)
-        sys.exit(1)
-
-    cmd = [
-        "calibredb", "list",
-        "--search", query,
-        "--fields", "id,title,authors",
-        "--with-library", str(config.calibre.library_path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        click.echo(f"❌ calibredb error: {result.stderr.strip()}", err=True)
-        sys.exit(1)
-
-    output = result.stdout.strip()
-    if not output:
-        click.echo(f"No books found matching: {query}")
-    else:
-        click.echo(output)
+    output = _calibredb_list(query, config)
+    click.echo(output if output else f"No books found matching: {query}")
 
 
 @main.command("revert-import")
-@click.argument("book_id", type=int)
+@click.argument("book_id", required=False, default=None, type=int)
+@click.option("--search", "search_query", default=None, metavar="QUERY",
+              help="Search Calibre by title/author, show matches, then prompt for the ID to revert.")
 @_CONFIG_OPTION
-def revert_import(book_id: int, config_path: Optional[Path]) -> None:
+def revert_import(
+    book_id: Optional[int],
+    search_query: Optional[str],
+    config_path: Optional[Path],
+) -> None:
     """Remove a book from Calibre and return it to review/ for re-processing.
 
-    BOOK_ID is the Calibre library book ID — visible in the Calibre GUI title bar
-    or found via: calibredb search "title:<title>" --with-library ~/Calibre\\ Library
+    Provide the Calibre book ID directly, or use --search to find it:
 
+    \b
+      libris revert-import 42
+      libris revert-import --search "Caliban"
+
+    \b
     Steps performed:
       1. Export the book file(s) from Calibre to review/
       2. Remove the book from the Calibre library
@@ -329,6 +348,26 @@ def revert_import(book_id: int, config_path: Optional[Path]) -> None:
     path = _resolve_config(config_path)
     config = load_config(path)
     _setup_logging(config.log_level)
+
+    # ── Resolve book_id (direct arg or interactive search) ────────────
+    if book_id is None and search_query is None:
+        click.echo(
+            "❌ Provide a BOOK_ID argument or use --search <query>.\n"
+            "Example: libris revert-import --search \"Caliban\"",
+            err=True,
+        )
+        sys.exit(1)
+
+    if search_query is not None:
+        output = _calibredb_list(search_query, config)
+        if not output:
+            click.echo(f"No books found matching: {search_query}")
+            sys.exit(0)
+        click.echo(f"\nResults for \"{search_query}\":\n")
+        click.echo(output)
+        click.echo()
+        book_id = click.prompt("Enter Calibre book ID to revert (or Ctrl-C to cancel)", type=int)
+        click.echo()
 
     calibre = get_calibre(config.calibre)
     store = StateStore(config.paths.state_db)
