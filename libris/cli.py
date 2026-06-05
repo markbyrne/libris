@@ -35,7 +35,7 @@ from .config import load_config
 from .exceptions import RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
 from .metadata.resolver import _extract_author_hint, _extract_year
-from .metadata.scorer import score_candidate
+from .metadata.scorer import dedup_candidates, score_candidate
 from .pipeline import Pipeline
 from .state import FileState, StateStore
 
@@ -880,10 +880,12 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                                 "    OpenLibrary    rate limited — skipped", dim=True
                             ))
 
-        all_results = sorted(
-            google_results + ol_results,
-            key=lambda r: r.confidence,
-            reverse=True,
+        all_results = dedup_candidates(
+            sorted(
+                google_results + ol_results,
+                key=lambda r: r.confidence,
+                reverse=True,
+            )
         )[:3]
 
         current_query = query_str  # persist refined query for next iteration

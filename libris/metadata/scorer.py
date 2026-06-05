@@ -13,6 +13,8 @@ AND share an author surname.
 
 from __future__ import annotations
 
+import re
+
 from rapidfuzz import fuzz
 
 from .base import BookCandidate, MetadataResult, ScoredCandidate, SearchQuery
@@ -59,6 +61,30 @@ def score_candidate(query: SearchQuery, candidate: BookCandidate) -> ScoredCandi
         confidence=confidence,
         score_breakdown=breakdown,
     )
+
+
+def dedup_candidates(candidates: list[ScoredCandidate]) -> list[ScoredCandidate]:
+    """Remove duplicate editions of the same book.
+
+    Groups by normalised (title, author surnames) and keeps the highest-scored
+    candidate per group.  Different editions of the same book (same title and
+    author, different publisher/year/ISBN) are treated as duplicates — the user
+    only needs to see the book once.
+
+    Input order within each group is already score-descending (callers sort
+    before deduping), so the first entry seen per key is the winner.
+    """
+    def _key(sc: ScoredCandidate) -> tuple:
+        title = re.sub(r"[^\w\s]", "", sc.candidate.title.lower()).strip()
+        surnames = tuple(sorted(sc.candidate.author_surnames))
+        return (title, surnames)
+
+    seen: dict[tuple, ScoredCandidate] = {}
+    for sc in candidates:
+        k = _key(sc)
+        if k not in seen or sc.confidence > seen[k].confidence:
+            seen[k] = sc
+    return sorted(seen.values(), key=lambda sc: sc.confidence, reverse=True)
 
 
 def pick_best(candidates: list[ScoredCandidate]) -> ScoredCandidate | None:
