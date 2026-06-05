@@ -438,10 +438,10 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
 
         # ── Query tips ───────────────────────────────────────────────
         click.echo(click.style("  Tips", bold=True))
-        click.echo(click.style("    · Use the book title for best results", dim=True))
+        click.echo(click.style("    · Title only", dim=True))
         click.echo(click.style("        \"Caliban and the Witch\"", dim=True))
-        click.echo(click.style("    · Add author surname to narrow results", dim=True))
-        click.echo(click.style("        \"Caliban Federici\"", dim=True))
+        click.echo(click.style("    · Add author with 'by' for best results", dim=True))
+        click.echo(click.style("        \"Caliban and the Witch by Silvia Federici\"", dim=True))
         click.echo(click.style("    · Use ISBN if known", dim=True))
         click.echo(click.style("        \"9780441013593\"", dim=True))
         click.echo(click.style("    · Type /clear to redraw the screen", dim=True))
@@ -469,26 +469,50 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                 click.prompt("  Press Enter to continue", default="", show_default=False)
             continue  # Re-render the panel with updated source (no search)
 
-        click.echo()
-        click.echo("  Searching…")
+        # Parse "Title by Author" format — keeps title and author in separate
+        # API fields for much better results than a fused free-text string.
+        _by = " by "
+        if _by in query_str.lower():
+            _split = query_str.lower().index(_by)
+            _parsed_title = query_str[:_split].strip()
+            _parsed_author = query_str[_split + len(_by):].strip()
+        else:
+            _parsed_title = query_str
+            _parsed_author = author_hint  # fall back to hint from filename
 
         search_query = SearchQuery(
-            clean_title=query_str,
-            author_hint=author_hint,
+            clean_title=_parsed_title,
+            author_hint=_parsed_author or author_hint,
             year_hint=year_hint,
         )
+
+        click.echo()
+        click.echo("  Searching…")
+        click.echo()
 
         with httpx.Client(timeout=12.0) as client:
             google_results: list = []
             ol_results: list = []
+
             if current_source in ("all", "google"):
                 google_results = google_books.fetch(
                     search_query,
                     api_key=config.metadata.google_books_api_key,
                     client=client,
                 )
+                _g = len(google_results)
+                click.echo(f"    Google Books   " + (
+                    click.style(f"{_g} result(s)", bold=True) if _g
+                    else click.style("no results", dim=True)
+                ))
+
             if current_source in ("all", "openlibrary"):
                 ol_results = open_library.fetch(search_query, client=client)
+                _ol = len(ol_results)
+                click.echo(f"    OpenLibrary    " + (
+                    click.style(f"{_ol} result(s)", bold=True) if _ol
+                    else click.style("no results", dim=True)
+                ))
 
         all_results = sorted(
             google_results + ol_results,
@@ -500,7 +524,13 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
 
         if not all_results:
             click.echo()
-            click.echo("  No results found — try a different query.")
+            click.echo("  No results found.")
+            if _by not in query_str.lower():
+                click.echo(click.style(
+                    "  Tip: add the author using 'by' — "
+                    f'"{_parsed_title} by <Author Name>"',
+                    dim=True,
+                ))
             click.prompt("\n  Press Enter to refine", default="", show_default=False)
             continue
 
