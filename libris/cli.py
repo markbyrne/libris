@@ -407,7 +407,16 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
     from .metadata import google_books, open_library
 
     while True:
-        click.echo(_hr())
+        click.clear()
+
+        # ── File context (always visible after clear) ─────────────────
+        click.echo()
+        click.echo(f"  Rematching: {file_path.name}")
+        if record.matched_title:
+            conf_str = f"{record.confidence:.2f}" if record.confidence is not None else "n/a"
+            author_str = f"  by {record.matched_author}" if record.matched_author else ""
+            click.echo(f"  Current:    {record.matched_title}{author_str}  (score: {conf_str})")
+        click.echo()
 
         # ── API status panel ─────────────────────────────────────────
         google_on = current_source in ("all", "google")
@@ -435,28 +444,30 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
         click.echo(click.style("        \"Caliban Federici\"", dim=True))
         click.echo(click.style("    · Use ISBN if known", dim=True))
         click.echo(click.style("        \"9780441013593\"", dim=True))
+        click.echo(click.style("    · Type /clear to redraw the screen", dim=True))
         click.echo()
 
         click.echo(_hr())
         query_str = click.prompt("  Query", default=current_query)
 
-        # ── Handle /api slash command ─────────────────────────────────
+        # ── Handle slash commands ─────────────────────────────────────
         _API_CHOICES = ("all", "google", "openlibrary")
-        if query_str.strip().lower().startswith("/api"):
-            parts = query_str.strip().split()
-            if len(parts) == 2 and parts[1].lower() in _API_CHOICES:
-                current_source = parts[1].lower()
-                click.echo()
-                click.echo(f"  Source updated to: {current_source}")
-                click.echo()
+        _cmd = query_str.strip().lower()
+
+        if _cmd == "/clear":
+            continue  # click.clear() fires at top of loop
+
+        if _cmd.startswith("/api"):
+            parts = _cmd.split()
+            if len(parts) == 2 and parts[1] in _API_CHOICES:
+                current_source = parts[1]
             else:
-                click.echo()
                 click.echo(click.style(
-                    f"  Usage: /api <option>  ·  options: {', '.join(_API_CHOICES)}",
+                    f"\n  Usage: /api <option>  ·  options: {', '.join(_API_CHOICES)}\n",
                     fg="yellow",
                 ))
-                click.echo()
-            continue  # Re-render the panel with the new source (no search)
+                click.prompt("  Press Enter to continue", default="", show_default=False)
+            continue  # Re-render the panel with updated source (no search)
 
         source_str = click.prompt(
             "  Source",
