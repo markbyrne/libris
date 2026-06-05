@@ -60,7 +60,7 @@ def resolve_metadata(
     log.info(
         "metadata.resolving",
         extra={
-            "filename": filename,
+            "source_file": filename,
             "clean_title": query.clean_title,
             "isbn": query.isbn,
             "author_hint": query.author_hint,
@@ -87,7 +87,7 @@ def resolve_metadata(
     log.info(
         "metadata.resolved",
         extra={
-            "filename": filename,
+            "source_file": filename,
             "best_title": result.title,
             "best_author": result.author,
             "confidence": f"{result.confidence:.2f}",
