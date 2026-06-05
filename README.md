@@ -243,15 +243,6 @@ UPDATE files SET state='incoming' WHERE state='processing';
 
 ---
 
-<!-- TODO: MARKETING
-When making this repo public:
-- Post to r/Calibre and r/selfhosted
-- Post to MobileRead forums (mobileread.com) — largest Calibre community
-- Submit PR to awesome-selfhosted list (github.com/awesome-selfhosted/awesome-selfhosted)
-- Publish to PyPI: pip install libris
-- Add GitHub Sponsors / Ko-fi if there's interest
--->
-
 ## License
 
 MIT
