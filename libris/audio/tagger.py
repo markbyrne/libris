@@ -105,6 +105,14 @@ def _build_ffmpeg_cmd(
         tags["comment"] = result.description[:500]
     if result.language:
         tags["language"] = result.language
+    if result.series:
+        # grouping  — read by Apple Books, Prologue, Overcast, and most players
+        index_suffix = f" #{int(result.series_index)}" if result.series_index is not None else ""
+        tags["grouping"] = f"{result.series}{index_suffix}"
+        # series / series-part — AudioBookshelf custom tags
+        tags["series"] = result.series
+        if result.series_index is not None:
+            tags["series-part"] = str(int(result.series_index))
 
     for key, value in tags.items():
         if value:

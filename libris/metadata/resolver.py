@@ -50,12 +50,15 @@ def resolve_metadata(
     isbn = extract_isbn(stem)
     year = _extract_year(stem)
     author_hint = _extract_author_hint(stem)
+    series_hint, series_index_hint = _extract_series(stem)
 
     query = SearchQuery(
         clean_title=clean or stem,   # fallback to stem if everything was stripped
         author_hint=author_hint,
         isbn=isbn,
         year_hint=year,
+        series_hint=series_hint,
+        series_index_hint=series_index_hint,
     )
 
     log.info(
@@ -100,6 +103,16 @@ def resolve_metadata(
 
     # ── Fuse & score ─────────────────────────────────────────────────────
     result = build_result(query, google_scored, ol_scored, config.confidence_threshold)
+
+    # ── Apply filename series hints ───────────────────────────────────────
+    # If the filename contained a series hint and the winning candidate has no
+    # series data from the API, fill it in from the filename.
+    if result.best and query.series_hint:
+        c = result.best.candidate
+        if not c.series:
+            c.series = query.series_hint
+        if c.series_index is None and query.series_index_hint is not None:
+            c.series_index = query.series_index_hint
 
     # ── Download cover art ───────────────────────────────────────────────
     if embed_cover and result.best and result.best.candidate.cover_url and not config.mock_mode:
@@ -193,6 +206,7 @@ def _extract_author_hint(stem: str) -> Optional[str]:
     - 1–4 tokens
     - Every token starts with an uppercase letter (proper name)
     - Not a known noise word
+    - No bare numbers (avoids "Series 1 - Title" misidentifying the title as author)
 
     Returns None if no confident author hint is found.
     """
@@ -205,16 +219,73 @@ def _extract_author_hint(stem: str) -> Optional[str]:
     if len(parts) != 2:
         return None
 
-    for part in parts:
-        tokens = part.strip().split()
+    # If either part contains a bare number it's almost certainly a
+    # "Series N - Title" pattern, not "Title - Author" — bail out early.
+    if any(re.search(r'\b\d+\b', p) for p in parts):
+        return None
+
+    def _looks_like_author(s: str) -> bool:
+        tokens = s.strip().split()
         if not (1 <= len(tokens) <= 4):
-            continue
-        # All tokens must start with uppercase — proper names only, not generic lowercase tags
+            return False
         if not all(t[0].isupper() for t in tokens if t):
-            continue
-        # Reject known noise words (case-insensitive)
+            return False
         if any(t.lower() in _NOISE_WORDS for t in tokens):
-            continue
-        return part.strip()
+            return False
+        return True
+
+    # Convention is almost always "Title - Author Name", so check the part
+    # after the dash first.  Fall back to the first part for the rarer
+    # "Author - Title" pattern.
+    for part in (parts[1], parts[0]):
+        if _looks_like_author(part):
+            return part.strip()
 
     return None
+
+
+# Series extraction patterns (applied in order, first match wins)
+_SERIES_IN_TITLE = re.compile(
+    r'\(([^)]+?)[,\s]+(?:book|vol(?:ume)?|part|#)\s*(\d+(?:\.\d+)?)\)',
+    re.IGNORECASE,
+)
+_SERIES_IN_TITLE_SIMPLE = re.compile(
+    r'\(([^)#,]+?),?\s+#(\d+(?:\.\d+)?)\)',
+    re.IGNORECASE,
+)
+_SERIES_PREFIX = re.compile(
+    r'^(.+?)\s+(\d+(?:\.\d+)?)\s*$',
+)
+
+
+def _extract_series(stem: str) -> tuple[Optional[str], Optional[float]]:
+    """Extract series name and index from a filename stem.
+
+    Handles the two most common patterns:
+      "Inheritance Cycle 1 - Eragon"   → ("Inheritance Cycle", 1.0)
+      "Eragon (Inheritance Cycle, #1)" → ("Inheritance Cycle", 1.0)
+      "Eragon (Inheritance Cycle #1)"  → ("Inheritance Cycle", 1.0)
+      "Harry Potter (Book 3)"          → ("Harry Potter", 3.0)
+
+    Returns (None, None) if no series pattern is found.
+    """
+    # Pattern 1: "Series N - Title" prefix
+    parts = re.split(r"\s[-–—]\s", stem, maxsplit=1)
+    if len(parts) == 2:
+        m = _SERIES_PREFIX.match(parts[0].strip())
+        if m:
+            try:
+                return m.group(1).strip(), float(m.group(2))
+            except ValueError:
+                pass
+
+    # Pattern 2: "Title (Series, #N)" or "Title (Series Book N)" in stem
+    for pat in (_SERIES_IN_TITLE, _SERIES_IN_TITLE_SIMPLE):
+        m = pat.search(stem)
+        if m:
+            try:
+                return m.group(1).strip(), float(m.group(2))
+            except ValueError:
+                return m.group(1).strip(), None
+
+    return None, None

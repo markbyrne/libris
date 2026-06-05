@@ -42,9 +42,11 @@ class SearchQuery:
     """Cleaned query to send to metadata sources."""
 
     clean_title: str
-    author_hint: Optional[str] = None  # may be None if not parseable from filename
-    isbn: Optional[str] = None         # extracted from filename, if any
-    year_hint: Optional[int] = None    # extracted from filename, if any
+    author_hint: Optional[str] = None       # may be None if not parseable from filename
+    isbn: Optional[str] = None              # extracted from filename, if any
+    year_hint: Optional[int] = None         # extracted from filename, if any
+    series_hint: Optional[str] = None       # extracted from filename, if any
+    series_index_hint: Optional[float] = None  # extracted from filename, if any
 
 
 @dataclass

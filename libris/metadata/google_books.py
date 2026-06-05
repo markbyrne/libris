@@ -11,11 +11,23 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import re
+
 import httpx
 
 from ..exceptions import RateLimitError
 from .base import BookCandidate, SearchQuery, ScoredCandidate
 from .scorer import score_candidate
+
+# Patterns for series embedded in book titles
+_SERIES_IN_TITLE = re.compile(
+    r'\s*\(([^)]+?)[,\s]+(?:book|vol(?:ume)?|part|#)\s*(\d+(?:\.\d+)?)\)',
+    re.IGNORECASE,
+)
+_SERIES_HASH = re.compile(
+    r'\s*\(([^)#,]+?),?\s+#(\d+(?:\.\d+)?)\)',
+    re.IGNORECASE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -155,8 +167,38 @@ def _parse_response(data: dict) -> list[BookCandidate]:
             if "zoom=" in cover_url:
                 cover_url = cover_url.replace("zoom=1", "zoom=3")
 
+        # Extract series from title or subtitle
+        # e.g. "Eragon (Inheritance Cycle, #1)" → title="Eragon", series="Inheritance Cycle"
+        series: Optional[str] = None
+        series_index: Optional[float] = None
+        subtitle = info.get("subtitle", "")
+        clean_title = title
+
+        for pat in (_SERIES_IN_TITLE, _SERIES_HASH):
+            m = pat.search(title)
+            if m:
+                clean_title = title[:m.start()].strip()
+                series = m.group(1).strip()
+                try:
+                    series_index = float(m.group(2))
+                except (ValueError, IndexError):
+                    pass
+                break
+
+        # Fall back to subtitle if no series found in title
+        if not series and subtitle:
+            for pat in (_SERIES_IN_TITLE, _SERIES_HASH):
+                m = pat.search(subtitle)
+                if m:
+                    series = m.group(1).strip()
+                    try:
+                        series_index = float(m.group(2))
+                    except (ValueError, IndexError):
+                        pass
+                    break
+
         candidates.append(BookCandidate(
-            title=title,
+            title=clean_title,
             authors=info.get("authors") or [],
             isbn_13=isbn_13,
             isbn_10=isbn_10,
@@ -164,6 +206,8 @@ def _parse_response(data: dict) -> list[BookCandidate]:
             publisher=info.get("publisher"),
             description=info.get("description"),
             language=info.get("language"),
+            series=series,
+            series_index=series_index,
             categories=info.get("categories") or [],
             cover_url=cover_url,
             source="google_books",
