@@ -86,6 +86,42 @@ class Pipeline:
         event = FileEvent(path=path, event_type="created")
         return self._handle_event(event)
 
+    def force_import(self, path: Path, result: MetadataResult) -> FileRecord:
+        """Import a file using pre-resolved metadata, bypassing API lookup and threshold.
+
+        Used by the interactive `rematch` command after the user manually selects
+        a metadata candidate.  The file is imported into Calibre immediately.
+        """
+        media_type = self._classifier.classify(path)
+        if media_type == MediaType.UNKNOWN:
+            log.warning("pipeline.force_import_unknown", extra={"path": str(path)})
+            return self._make_record(path, "unknown", FileState.FAILED)
+
+        record = self._get_or_create_record(path, media_type.value)
+        record.state = FileState.PROCESSING
+        record.matched_title = result.title
+        record.matched_author = result.author
+        record.confidence = result.confidence
+        self._store.upsert(record)
+
+        try:
+            # Embed audio tags before adding to Calibre (cover set via set_cover instead)
+            if media_type == MediaType.AUDIOBOOK:
+                audio_tag.embed_metadata(path, result, overwrite=True)
+
+            book_id = self._calibre.add_book(path)
+            record.calibre_book_id = book_id
+            self._calibre.set_metadata(book_id, result)
+            if self.config.output.embed_cover_art and result.cover_path:
+                self._calibre.set_cover(book_id, result.cover_path)
+
+            # original_path == processed_path here (file is already in final format)
+            return self._mark_imported(record, path, path, result)
+
+        except BookPipelineError as exc:
+            log.exception("pipeline.force_import_failed", extra={"path": str(path)})
+            return self._mark_failed(record, exc)
+
     # ------------------------------------------------------------------
     # Core event handler
     # ------------------------------------------------------------------

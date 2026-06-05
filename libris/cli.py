@@ -9,6 +9,7 @@ Commands:
   libris reset           — Reset stuck PROCESSING records back to INCOMING
   libris revert-import   — Remove a book from Calibre and return it to review/
   libris search          — Search the Calibre library (uses library path from config)
+  libris rematch         — Interactively re-query metadata APIs for a review item
 """
 
 from __future__ import annotations
@@ -22,9 +23,14 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import httpx
 
 from .calibre import get_calibre
+from .cleaner import clean_query as _clean_query
 from .config import load_config
+from .metadata.base import MetadataResult, SearchQuery
+from .metadata.resolver import _extract_author_hint, _extract_year
+from .metadata.scorer import score_candidate
 from .pipeline import Pipeline
 from .state import FileState, StateStore
 
@@ -176,6 +182,7 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo("Accept by ID:    libris review-accept --id <N>")
     click.echo("Accept all:      libris review-accept --accept-all")
     click.echo("Accept by path:  libris review-accept \"<path>\"")
+    click.echo("Fix bad match:   libris rematch --id <N>")
 
 
 @main.command("review-accept")
@@ -319,6 +326,205 @@ def search(query: str, config_path: Optional[Path]) -> None:
     config = load_config(path)
     output = _calibredb_list(query, config)
     click.echo(output if output else f"No books found matching: {query}")
+
+
+@main.command("rematch")
+@click.option("--id", "review_id", required=True, type=int,
+              help="Review queue position (from 'libris list-review')")
+@click.option("--source",
+              type=click.Choice(["all", "google", "openlibrary"], case_sensitive=False),
+              default="all", show_default=True,
+              help="Metadata source(s) to query")
+@_CONFIG_OPTION
+def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
+    """Interactively re-query metadata APIs for a review queue item.
+
+    Shows top 3 candidates with full score breakdowns. Refine the search
+    query until you find the right match, then select it to import immediately.
+
+    \b
+    Example:
+      libris rematch --id 1
+      libris rematch --id 1 --source google
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+
+    # ── Load review record ────────────────────────────────────────────
+    store = StateStore(config.paths.state_db)
+    records = store.list_by_state(FileState.REVIEW)
+    store.close()
+
+    if not records:
+        click.echo("No files in review queue.")
+        return
+
+    if review_id < 1 or review_id > len(records):
+        click.echo(
+            f"❌ ID {review_id} out of range — queue has {len(records)} item(s).\n"
+            "Run 'libris list-review' to see current IDs.",
+            err=True,
+        )
+        sys.exit(1)
+
+    record = records[review_id - 1]
+    file_path = Path(record.current_path)
+
+    if not file_path.exists():
+        click.echo(f"❌ File not found: {file_path}", err=True)
+        sys.exit(1)
+
+    # ── Header ────────────────────────────────────────────────────────
+    click.echo(f"\nFile:    {file_path.name}")
+    if record.matched_title:
+        conf_str = f"{record.confidence:.2f}" if record.confidence is not None else "n/a"
+        author_str = f" by {record.matched_author}" if record.matched_author else ""
+        click.echo(f"Current: {record.matched_title}{author_str}  (score: {conf_str})")
+    click.echo()
+
+    # Reconstruct author/year hints from original filename for scoring
+    stem = file_path.stem
+    author_hint = _extract_author_hint(stem)
+    year_hint = _extract_year(stem)
+    current_query = _clean_query(stem) or stem
+    current_source = source
+
+    # ── Interactive search loop ───────────────────────────────────────
+    from .metadata import google_books, open_library
+
+    while True:
+        # Prompt for query and source (pre-filled with current values)
+        query_str = click.prompt("  Query", default=current_query)
+        source_str = click.prompt(
+            "  Source",
+            default=current_source,
+            type=click.Choice(["all", "google", "openlibrary"], case_sensitive=False),
+        )
+        click.echo()
+
+        # Build query object — use original filename hints for author/year scoring
+        search_query = SearchQuery(
+            clean_title=query_str,
+            author_hint=author_hint,
+            year_hint=year_hint,
+        )
+
+        # Fetch from selected sources
+        click.echo("  Searching…")
+        with httpx.Client(timeout=12.0) as client:
+            google_results: list = []
+            ol_results: list = []
+            if source_str in ("all", "google"):
+                google_results = google_books.fetch(
+                    search_query,
+                    api_key=config.metadata.google_books_api_key,
+                    client=client,
+                )
+            if source_str in ("all", "openlibrary"):
+                ol_results = open_library.fetch(search_query, client=client)
+
+        # Merge and rank by confidence, keep top 3
+        all_results = sorted(
+            google_results + ol_results,
+            key=lambda r: r.confidence,
+            reverse=True,
+        )[:3]
+
+        if not all_results:
+            click.echo("  No results found — try a different query.\n")
+            current_query = query_str
+            current_source = source_str
+            continue
+
+        # Display results with score breakdown
+        click.echo()
+        _WEIGHT_MAX = {"isbn": 0.40, "title": 0.30, "author": 0.20, "year": 0.10}
+        for i, scored in enumerate(all_results, 1):
+            c = scored.candidate
+            bd = scored.score_breakdown
+            source_label = c.source.replace("_", " ").title()
+            authors = ", ".join(c.authors) if c.authors else "Unknown"
+
+            click.echo(f"  [{i}] {c.title}")
+            click.echo(f"      {authors}  ·  {source_label}  ·  score {scored.confidence:.2f}")
+
+            # Details line
+            details = [p for p in [
+                c.publisher,
+                str(c.published_year) if c.published_year else None,
+                f"ISBN {c.isbn}" if c.isbn else None,
+            ] if p]
+            if details:
+                click.echo(f"      {' · '.join(details)}")
+
+            # Score breakdown line
+            breakdown_parts = [
+                f"{k} {bd.get(k, 0.0):.2f}/{mx:.2f}"
+                for k, mx in _WEIGHT_MAX.items()
+            ]
+            if bd.get("agreement_bonus"):
+                breakdown_parts.append(f"agreement +{bd['agreement_bonus']:.2f}")
+            click.echo(f"      Breakdown: {' · '.join(breakdown_parts)}")
+            click.echo()
+
+        # Selection prompt
+        click.echo("  [1/2/3] import  [r] refine query  [q] quit")
+        choice = click.prompt("  Choice", default="1").strip().lower()
+        click.echo()
+
+        if choice in ("1", "2", "3"):
+            idx = int(choice) - 1
+            if idx >= len(all_results):
+                click.echo(f"  ❌ Only {len(all_results)} result(s) shown.")
+                continue
+
+            selected = all_results[idx]
+
+            # Download cover if available
+            cover_path = None
+            if config.output.embed_cover_art and selected.candidate.cover_url:
+                from .metadata.resolver import _download_cover
+                with httpx.Client(timeout=12.0) as client:
+                    cover_path = _download_cover(selected.candidate.cover_url, client)
+
+            # Build a MetadataResult from the chosen candidate
+            result = MetadataResult(
+                query=search_query,
+                best=selected,
+                all_candidates=all_results,
+                above_threshold=True,
+                cover_path=cover_path,
+            )
+
+            # Import via pipeline (skips API lookup, uses result directly)
+            pipeline = Pipeline(config)
+            imported_record = pipeline.force_import(file_path, result)
+
+            if imported_record.state == FileState.IMPORTED:
+                pipeline._store.cleanup_stale_review(
+                    str(file_path), exclude_id=imported_record.id
+                )
+                click.echo(f"  ✅ Imported: {selected.candidate.title}")
+                if selected.candidate.authors:
+                    click.echo(f"     Author:   {', '.join(selected.candidate.authors)}")
+                click.echo(f"     Score:    {selected.confidence:.2f} (manually selected)")
+            else:
+                click.echo(f"  ❌ Import failed: {imported_record.error_msg}", err=True)
+                sys.exit(1)
+            return
+
+        elif choice == "r":
+            current_query = query_str
+            current_source = source_str
+            continue
+
+        elif choice == "q":
+            click.echo("  Cancelled — file remains in review.")
+            return
+
+        else:
+            click.echo("  Please enter 1, 2, 3, r, or q.\n")
 
 
 @main.command("revert-import")
