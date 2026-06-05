@@ -7,6 +7,7 @@ Commands:
   libris list-review     — Show all files in REVIEW state
   libris review-accept   — Force-import a file from review/, bypassing confidence check
   libris reset           — Reset stuck PROCESSING records back to INCOMING
+  libris recover         — Move failed files back to review/ for re-processing
   libris revert-import   — Remove a book from Calibre and return it to review/
   libris search          — Search the Calibre library (uses library path from config)
   libris rematch         — Interactively re-query metadata APIs for a review item
@@ -19,8 +20,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 import click
 import httpx
@@ -28,11 +32,14 @@ import httpx
 from .calibre import get_calibre
 from .cleaner import clean_query as _clean_query
 from .config import load_config
+from .exceptions import RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
 from .metadata.resolver import _extract_author_hint, _extract_year
 from .metadata.scorer import score_candidate
 from .pipeline import Pipeline
 from .state import FileState, StateStore
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +111,117 @@ def _calibredb_list(query: str, config) -> str:
 
 def _hr(width: int = 50) -> str:
     return "  " + "─" * width
+
+
+def _hyperlink(url: str, text: str) -> str:
+    """Wrap text in an OSC 8 terminal hyperlink (supported by iTerm2, Terminal, Warp, etc.)."""
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit helpers (used by rematch)
+# ---------------------------------------------------------------------------
+
+def _save_google_api_key(config_path: Path, api_key: str) -> bool:
+    """Insert/update google_books_api_key in the config file. Returns True on success."""
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["google_books_api_key"] = api_key
+        with open(config_path, "w") as f:
+            yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return True
+    except Exception as exc:
+        log.warning("cli.save_api_key_failed", extra={"error": str(exc)})
+        return False
+
+
+def _prompt_add_google_key(config_path: Path) -> str:
+    """Walk the user through getting a Google Books API key. Returns 'key_saved' or 'skip'."""
+    click.echo()
+    click.echo("  To get a free Google Books API key:")
+    click.echo(click.style("    1.  https://console.developers.google.com/", bold=True))
+    click.echo(click.style('    2.  Create (or select) a project', dim=True))
+    click.echo(click.style('    3.  APIs & Services  →  Enable APIs & Services', dim=True))
+    click.echo(click.style('    4.  Search "Books API" and enable it', dim=True))
+    click.echo(click.style('    5.  Credentials  →  Create credentials  →  API key', dim=True))
+    click.echo()
+
+    api_key = click.prompt("  Paste API key (or Enter to skip)").strip()
+    if not api_key:
+        click.echo(click.style("  No key entered — skipping Google Books.", fg="yellow"))
+        return "skip"
+
+    if _save_google_api_key(config_path, api_key):
+        click.echo(click.style(f"\n  ✅  Key saved to {config_path.name}. Retrying…\n", fg="green"))
+        return "key_saved"
+    else:
+        click.echo(click.style(
+            f"\n  ⚠   Could not save the key automatically.\n"
+            f"  Add it manually to {config_path} under metadata:\n"
+            f"    google_books_api_key: \"{api_key}\"\n",
+            fg="yellow",
+        ))
+        return "skip"
+
+
+def _prompt_rate_limit(error: RateLimitError, config_path: Path, config) -> str:
+    """Show rate-limit options and return 'wait', 'key_saved', or 'skip'.
+
+    For Google Books without an API key, also offers to add one.
+    The function blocks during any countdown (wait choice).
+    """
+    is_google = error.source == "google_books"
+    source_label = "Google Books" if is_google else "OpenLibrary"
+    has_key = bool(config.metadata.google_books_api_key) if is_google else False
+    wait_secs = error.retry_after or (60 if is_google else 30)
+
+    click.echo()
+    click.echo(click.style(f"  ⚠   {source_label} rate limit hit", fg="yellow"))
+
+    if is_google and not has_key:
+        click.echo(click.style(
+            "      Unauthenticated: ~60 req/min. An API key grants 1,000 req/day.",
+            dim=True,
+        ))
+    elif is_google and has_key:
+        click.echo(click.style(
+            "      Daily API key quota (1,000 req/day) exhausted.",
+            dim=True,
+        ))
+
+    click.echo()
+    click.echo(f"  [w]  Wait {wait_secs}s and retry")
+    if is_google and not has_key:
+        click.echo( "  [k]  Add a Google Books API key (free, 1,000 req/day)")
+    click.echo(f"  [s]  Skip {source_label} for this search")
+    click.echo()
+
+    valid = ("w", "k", "s") if (is_google and not has_key) else ("w", "s")
+    while True:
+        choice = click.prompt("  Choice", default="w").strip().lower()
+        if choice in valid:
+            break
+        click.echo(click.style(f"  Please enter one of: {', '.join(valid)}", fg="yellow"))
+
+    if choice == "w":
+        click.echo()
+        try:
+            for remaining in range(wait_secs, 0, -1):
+                click.echo(f"\r  Waiting {remaining}s…  ", nl=False)
+                time.sleep(1)
+        except KeyboardInterrupt:
+            click.echo("\r  Wait cancelled — skipping.          ")
+            return "skip"
+        click.echo("\r  Done. Retrying…                      ")
+        return "wait"
+
+    if choice == "k":
+        return _prompt_add_google_key(config_path)
+
+    return "skip"  # choice == "s"
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +303,25 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  ntfy topic:     {config.ntfy.topic or '(not set)'}")
     click.echo(f"  ntfy enabled:   {config.ntfy.enabled}")
     click.echo(f"  Log level:      {config.log_level}")
+
+    # ── ntfy connectivity check ───────────────────────────────────────────
+    if config.ntfy.enabled and config.ntfy.topic:
+        click.echo()
+        click.echo("  Checking ntfy…  ", nl=False)
+        try:
+            _url = f"{config.ntfy.base_url.rstrip('/')}/{config.ntfy.topic}"
+            _headers = {"Title": "Libris check-config", "Priority": "min", "Tags": "white_check_mark"}
+            if config.ntfy.auth_token:
+                _headers["Authorization"] = f"Bearer {config.ntfy.auth_token}"
+            _r = httpx.post(_url, content=b"Connection test from libris check-config.", headers=_headers, timeout=8.0)
+            _r.raise_for_status()
+            click.echo(click.style("✅  notification sent", fg="green"))
+        except Exception as _exc:
+            click.echo(click.style(f"❌  failed: {_exc}", fg="red"))
+    elif config.ntfy.enabled and not config.ntfy.topic:
+        click.echo()
+        click.echo(click.style("  ⚠   ntfy is enabled but no topic is set — notifications will be skipped.", fg="yellow"))
+
     click.echo()
 
 
@@ -196,11 +333,18 @@ def list_review(config_path: Optional[Path]) -> None:
     config = load_config(path)
     store = StateStore(config.paths.state_db)
     records = store.list_by_state(FileState.REVIEW)
+    failed_records = store.list_by_state(FileState.FAILED)
     store.close()
 
     click.echo()
     if not records:
         click.echo("  No files in review.")
+        if failed_records:
+            click.echo()
+            click.echo(click.style(
+                f"  ⚠   {len(failed_records)} file(s) in FAILED state — run 'libris recover' to see them.",
+                fg="yellow",
+            ))
         click.echo()
         return
 
@@ -214,9 +358,23 @@ def list_review(config_path: Optional[Path]) -> None:
             matched += f"  by {r.matched_author}"
         conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
 
+        # Build the publication detail line from whatever we have stored
+        pub_parts = []
+        if r.matched_year:
+            pub_parts.append(str(r.matched_year))
+        if r.matched_publisher:
+            pub_parts.append(r.matched_publisher)
+        if r.matched_isbn:
+            pub_parts.append(f"ISBN {r.matched_isbn}")
+
         click.echo(f"  [{i}]  {Path(r.current_path).name}")
         click.echo(f"        Matched:  {matched}")
         click.echo(f"        Score:    {conf}")
+        if pub_parts:
+            click.echo(f"        Info:     {' · '.join(pub_parts)}")
+        if r.matched_cover_url:
+            link = _hyperlink(r.matched_cover_url, "View cover ↗")
+            click.echo(f"        Cover:    {link}")
         click.echo(f"        Path:     \"{r.current_path}\"")
         click.echo()
 
@@ -225,6 +383,12 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo("  Accept all:      libris review-accept --accept-all")
     click.echo("  Accept by path:  libris review-accept \"<path>\"")
     click.echo("  Fix bad match:   libris rematch --id <N>")
+    if failed_records:
+        click.echo()
+        click.echo(click.style(
+            f"  ⚠   {len(failed_records)} file(s) also in FAILED state — run 'libris recover'",
+            fg="yellow",
+        ))
     click.echo()
 
 
@@ -265,37 +429,49 @@ def review_accept(
 
     store = StateStore(config.paths.state_db)
 
+    # Build a list of (path, record_or_None) pairs so we can use cached
+    # metadata from the record and avoid a redundant API call.
     if review_id is not None or accept_all:
-        records = store.list_by_state(FileState.REVIEW)
+        all_records = store.list_by_state(FileState.REVIEW)
         store.close()
-        if not records:
+        if not all_records:
             click.echo("\n  No files in review queue.\n")
             return
         if review_id is not None:
-            if review_id < 1 or review_id > len(records):
+            if review_id < 1 or review_id > len(all_records):
                 _die(
-                    f"ID {review_id} out of range — queue has {len(records)} item(s).\n"
+                    f"ID {review_id} out of range — queue has {len(all_records)} item(s).\n"
                     "  Run 'libris list-review' to see current IDs."
                 )
-            targets = [Path(records[review_id - 1].current_path)]
+            target_pairs = [(Path(all_records[review_id - 1].current_path), all_records[review_id - 1])]
         else:
-            targets = [Path(r.current_path) for r in records]
+            target_pairs = [(Path(r.current_path), r) for r in all_records]
     else:
+        # Path-based: look up the record by current_path so we can use its cache
+        resolved = file_path.resolve()
+        cached = store.get_by_current_path(str(resolved))
         store.close()
-        targets = [file_path.resolve()]
+        target_pairs = [(resolved, cached)]
 
-    config.metadata.confidence_threshold = 0.0
     any_failed = False
 
     click.echo()
-    for target in targets:
+    for target, cached_record in target_pairs:
         if not target.exists():
             click.echo(f"  ⚠   Skipping (file not found): {target}", err=True)
             any_failed = True
             continue
 
         pipeline = Pipeline(config)
-        record = pipeline.process_file(target)
+
+        if cached_record and cached_record.matched_metadata_json:
+            # Fast path: use the metadata we already have — no API call
+            record = pipeline.import_from_record(cached_record)
+        else:
+            # Legacy path: no cached metadata (pre-feature records or path-based
+            # accept where the record wasn't found)
+            pipeline.config.metadata.confidence_threshold = 0.0
+            record = pipeline.process_file(target)
 
         if record.state == FileState.IMPORTED:
             pipeline._store.cleanup_stale_review(str(target), exclude_id=record.id)
@@ -307,12 +483,115 @@ def review_accept(
         if record.matched_author:
             click.echo(f"       Author:  {record.matched_author}")
         if record.confidence is not None:
-            click.echo(f"       Score:   {record.confidence:.2f} (threshold overridden)")
+            click.echo(f"       Score:   {record.confidence:.2f}")
         if record.error_msg:
             click.echo(f"       Error:   {record.error_msg}", err=True)
             any_failed = True
         click.echo()
 
+    sys.exit(1 if any_failed else 0)
+
+
+@main.command("recover")
+@click.option("--id", "recover_id", type=int, default=None,
+              help="Recover by position from the failed list")
+@click.option("--all", "recover_all", is_flag=True, default=False,
+              help="Recover every failed file back to review/")
+@_CONFIG_OPTION
+def recover(
+    recover_id: Optional[int],
+    recover_all: bool,
+    config_path: Optional[Path],
+) -> None:
+    """Move failed files back to review/ for re-processing.
+
+    Run without arguments to list failed files, then use --id or --all to
+    recover them.  Recovered files appear in 'libris list-review' and can be
+    fixed with 'libris rematch'.
+
+    \b
+      libris recover             # list failed files
+      libris recover --id 1     # move file [1] back to review/
+      libris recover --all      # move all failed files back to review/
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = StateStore(config.paths.state_db)
+    records = store.list_by_state(FileState.FAILED)
+
+    if not records:
+        store.close()
+        click.echo("\n  No files in failed state.\n")
+        return
+
+    # ── List mode (no action flag) ────────────────────────────────────────
+    if recover_id is None and not recover_all:
+        store.close()
+        click.echo()
+        click.echo(f"  {len(records)} file(s) in failed state")
+        click.echo(_hr())
+        click.echo()
+        for i, r in enumerate(records, 1):
+            exists = Path(r.current_path).exists()
+            name = Path(r.current_path).name
+            missing = click.style("  (file missing)", fg="yellow") if not exists else ""
+            click.echo(f"  [{i}]  {name}{missing}")
+            if r.error_msg:
+                click.echo(f"        Error:   {r.error_msg[:120]}")
+            click.echo(f"        Path:    \"{r.current_path}\"")
+            click.echo()
+        click.echo(_hr())
+        click.echo("  Recover by ID:   libris recover --id <N>")
+        click.echo("  Recover all:     libris recover --all")
+        click.echo()
+        return
+
+    # ── Determine targets ─────────────────────────────────────────────────
+    if recover_id is not None:
+        if recover_id < 1 or recover_id > len(records):
+            store.close()
+            _die(
+                f"ID {recover_id} out of range — {len(records)} failed file(s).\n"
+                "  Run 'libris recover' to see current IDs."
+            )
+        targets = [records[recover_id - 1]]
+    else:
+        targets = list(records)
+
+    review_dir = config.paths.review_dir
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    click.echo()
+    any_failed = False
+    for record in targets:
+        current = Path(record.current_path)
+        if not current.exists():
+            click.echo(
+                click.style(f"  ⚠   File not found, skipping: {current}", fg="yellow"),
+                err=True,
+            )
+            any_failed = True
+            continue
+
+        dest = review_dir / current.name
+        if dest.exists():
+            dest = review_dir / f"{current.stem}_recovered{current.suffix}"
+        shutil.move(str(current), str(dest))
+
+        record.state = FileState.REVIEW
+        record.current_path = str(dest)
+        record.error_msg = None
+        store.upsert(record)
+
+        click.echo(f"  ✅  {current.name}")
+        click.echo(f"       → review/{dest.name}")
+        click.echo()
+
+    store.close()
+    click.echo(_hr())
+    click.echo("  Run 'libris list-review' to confirm.")
+    click.echo("  Run 'libris rematch --id <N>' to fix the metadata match.")
+    click.echo()
     sys.exit(1 if any_failed else 0)
 
 
@@ -486,33 +765,64 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             year_hint=year_hint,
         )
 
-        click.echo()
-        click.echo("  Searching…")
-        click.echo()
+        # ── Fetch (with rate-limit retry) ─────────────────────────────
+        google_results: list = []
+        ol_results: list = []
+        _retry_search = True
 
-        with httpx.Client(timeout=12.0) as client:
-            google_results: list = []
-            ol_results: list = []
+        while _retry_search:
+            _retry_search = False
+            google_results = []
+            ol_results = []
 
-            if current_source in ("all", "google"):
-                google_results = google_books.fetch(
-                    search_query,
-                    api_key=config.metadata.google_books_api_key,
-                    client=client,
-                )
-                _g = len(google_results)
-                click.echo(f"    Google Books   " + (
-                    click.style(f"{_g} result(s)", bold=True) if _g
-                    else click.style("no results", dim=True)
-                ))
+            click.echo()
+            click.echo("  Searching…")
+            click.echo()
 
-            if current_source in ("all", "openlibrary"):
-                ol_results = open_library.fetch(search_query, client=client)
-                _ol = len(ol_results)
-                click.echo(f"    OpenLibrary    " + (
-                    click.style(f"{_ol} result(s)", bold=True) if _ol
-                    else click.style("no results", dim=True)
-                ))
+            with httpx.Client(timeout=12.0) as client:
+                if current_source in ("all", "google"):
+                    try:
+                        google_results = google_books.fetch(
+                            search_query,
+                            api_key=config.metadata.google_books_api_key,
+                            client=client,
+                        )
+                        _g = len(google_results)
+                        click.echo(f"    Google Books   " + (
+                            click.style(f"{_g} result(s)", bold=True) if _g
+                            else click.style("no results", dim=True)
+                        ))
+                    except RateLimitError as _rl:
+                        _action = _prompt_rate_limit(_rl, path, config)
+                        if _action == "key_saved":
+                            config = load_config(path)
+                            _retry_search = True
+                            break
+                        elif _action == "wait":
+                            _retry_search = True
+                            break
+                        else:
+                            click.echo(click.style(
+                                "    Google Books   rate limited — skipped", dim=True
+                            ))
+
+                if not _retry_search and current_source in ("all", "openlibrary"):
+                    try:
+                        ol_results = open_library.fetch(search_query, client=client)
+                        _ol = len(ol_results)
+                        click.echo(f"    OpenLibrary    " + (
+                            click.style(f"{_ol} result(s)", bold=True) if _ol
+                            else click.style("no results", dim=True)
+                        ))
+                    except RateLimitError as _rl:
+                        _action = _prompt_rate_limit(_rl, path, config)
+                        if _action == "wait":
+                            _retry_search = True
+                            break
+                        else:
+                            click.echo(click.style(
+                                "    OpenLibrary    rate limited — skipped", dim=True
+                            ))
 
         all_results = sorted(
             google_results + ol_results,
@@ -561,8 +871,9 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             click.echo(f"        Breakdown:  {' · '.join(bd_parts)}")
             click.echo()
 
+        _num_label = "/".join(str(i) for i in range(1, len(all_results) + 1))
         click.echo(_hr())
-        click.echo("  [1/2/3] import    [r] refine query    [q] quit")
+        click.echo(f"  [{_num_label}] import    [r] refine query    [q] quit")
         choice = click.prompt("  Choice", default="1").strip().lower()
         click.echo()
 

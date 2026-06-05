@@ -110,4 +110,6 @@ class Notifier:
             response.raise_for_status()
             log.debug("notifier.sent", extra={"title": title, "url": url})
         except Exception as exc:
-            log.warning("notifier.failed", extra={"error": str(exc), "title": title})
+            # Include the error in the message itself — the standard log format
+            # doesn't render extra= fields, so they would be silently invisible.
+            log.warning("notifier.failed: %s", exc, extra={"title": title, "url": url})

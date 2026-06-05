@@ -78,17 +78,40 @@ class DockerCalibre(CalibreBackend):
     def set_cover(self, book_id: int, cover_path: Path) -> None:
         if book_id < 0 or not cover_path.exists():
             return
-        container_path = self._translate(cover_path)
-        cmd = [
-            "docker", "exec", self._container,
-            "calibredb", "set_cover", str(book_id), container_path,
-        ]
-        log.debug("calibre.docker.set_cover", extra={"cmd": cmd})
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            log.warning("calibre.docker.set_cover_failed", extra={"stderr": result.stderr})
-        else:
-            log.info("calibre.docker.cover_set", extra={"book_id": book_id})
+        # Cover is a host-side temp file — copy it into the container first,
+        # set it via set_metadata --cover, then remove the container copy.
+        # (calibredb has no standalone set_cover subcommand.)
+        container_cover = f"/tmp/libris_cover_{cover_path.name}"
+        try:
+            cp = subprocess.run(
+                ["docker", "cp", str(cover_path), f"{self._container}:{container_cover}"],
+                capture_output=True, text=True,
+            )
+            if cp.returncode != 0:
+                log.warning(
+                    "calibre.docker.set_cover_failed",
+                    extra={"stage": "docker_cp", "stderr": cp.stderr},
+                )
+                return
+
+            cmd = [
+                "docker", "exec", self._container,
+                "calibredb", "set_metadata",
+                str(book_id),
+                "--cover", container_cover,
+            ]
+            log.debug("calibre.docker.set_cover", extra={"cmd": cmd})
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                log.warning("calibre.docker.set_cover_failed", extra={"stderr": result.stderr})
+            else:
+                log.info("calibre.docker.cover_set", extra={"book_id": book_id})
+        finally:
+            # Always clean up the container-side temp file
+            subprocess.run(
+                ["docker", "exec", self._container, "rm", "-f", container_cover],
+                capture_output=True,
+            )
 
     def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)

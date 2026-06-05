@@ -13,6 +13,7 @@ from typing import Optional
 
 import httpx
 
+from ..exceptions import RateLimitError
 from .base import BookCandidate, SearchQuery, ScoredCandidate
 from .scorer import score_candidate
 
@@ -41,14 +42,32 @@ def fetch(
     try:
         _client = client or httpx.Client(timeout=_TIMEOUT)
         response = _client.get(_BASE_URL, params=params)
+        if response.status_code == 429:
+            raise RateLimitError(
+                source="open_library",
+                retry_after=_parse_retry_after(response),
+            )
         response.raise_for_status()
         data = response.json()
+    except RateLimitError:
+        raise  # propagate to CLI so user can choose wait / skip
     except Exception as exc:
         log.warning("open_library.fetch_failed", extra={"error": str(exc)})
         return []
 
     candidates = _parse_response(data)
     return [score_candidate(query, c) for c in candidates]
+
+
+def _parse_retry_after(response: httpx.Response) -> Optional[int]:
+    """Return the Retry-After header value in seconds, or None if absent/unparseable."""
+    header = response.headers.get("retry-after") or response.headers.get("Retry-After")
+    if header:
+        try:
+            return int(header)
+        except ValueError:
+            pass
+    return None
 
 
 def _build_params(query: SearchQuery) -> dict:

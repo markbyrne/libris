@@ -11,6 +11,7 @@ Each sub-module (audio, metadata, calibre) knows only its own domain.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import tempfile
@@ -32,6 +33,63 @@ from .state import FileRecord, FileState, StateStore
 from .watcher import FileEvent, get_watcher
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Metadata serialisation helpers
+# ---------------------------------------------------------------------------
+
+def _serialize_candidate(scored: "ScoredCandidate") -> str:
+    """Serialise a ScoredCandidate to a JSON string for storage.
+
+    raw_response is intentionally omitted — it can be large and we only need
+    the fields required to reconstruct a MetadataResult for import.
+    """
+    from .metadata.base import ScoredCandidate  # local import avoids circular
+    c = scored.candidate
+    return json.dumps({
+        "title": c.title,
+        "authors": c.authors,
+        "isbn_13": c.isbn_13,
+        "isbn_10": c.isbn_10,
+        "published_year": c.published_year,
+        "publisher": c.publisher,
+        "description": c.description,
+        "language": c.language,
+        "series": c.series,
+        "series_index": c.series_index,
+        "cover_url": c.cover_url,
+        "categories": c.categories,
+        "source": c.source,
+        "confidence": scored.confidence,
+        "score_breakdown": scored.score_breakdown,
+    }, ensure_ascii=False)
+
+
+def _deserialize_candidate(blob: str) -> "ScoredCandidate":
+    """Reconstruct a ScoredCandidate from a stored JSON string."""
+    from .metadata.base import BookCandidate, ScoredCandidate
+    d = json.loads(blob)
+    candidate = BookCandidate(
+        title=d["title"],
+        authors=d.get("authors", []),
+        isbn_13=d.get("isbn_13"),
+        isbn_10=d.get("isbn_10"),
+        published_year=d.get("published_year"),
+        publisher=d.get("publisher"),
+        description=d.get("description"),
+        language=d.get("language"),
+        series=d.get("series"),
+        series_index=d.get("series_index"),
+        cover_url=d.get("cover_url"),
+        categories=d.get("categories", []),
+        source=d.get("source", ""),
+    )
+    return ScoredCandidate(
+        candidate=candidate,
+        confidence=d.get("confidence", 0.0),
+        score_breakdown=d.get("score_breakdown", {}),
+    )
 
 
 class Pipeline:
@@ -102,6 +160,10 @@ class Pipeline:
         record.matched_title = result.title
         record.matched_author = result.author
         record.confidence = result.confidence
+        record.matched_year = int(result.year) if result.year else None
+        record.matched_publisher = result.publisher or None
+        record.matched_isbn = result.isbn
+        record.matched_cover_url = result.best.candidate.cover_url if result.best else None
         self._store.upsert(record)
 
         try:
@@ -121,6 +183,47 @@ class Pipeline:
         except BookPipelineError as exc:
             log.exception("pipeline.force_import_failed", extra={"path": str(path)})
             return self._mark_failed(record, exc)
+
+    def import_from_record(self, record: "FileRecord") -> "FileRecord":
+        """Import a review-queue file using its persisted metadata (no API call).
+
+        Reconstructs the MetadataResult from the JSON stored when the file
+        first entered review, re-downloads the cover if configured, then
+        delegates to force_import.
+
+        Falls back to process_file (threshold=0) if no cached metadata exists
+        (e.g. records created before this feature was added).
+        """
+        if not record.matched_metadata_json:
+            log.info(
+                "pipeline.import_from_record.no_cache",
+                extra={"path": record.current_path},
+            )
+            self.config.metadata.confidence_threshold = 0.0
+            return self.process_file(Path(record.current_path))
+
+        scored = _deserialize_candidate(record.matched_metadata_json)
+
+        # Re-download cover from stored URL — one HTTP request, no API quota used
+        cover_path = None
+        if self.config.output.embed_cover_art and scored.candidate.cover_url:
+            import httpx
+            from .metadata.resolver import _download_cover
+            with httpx.Client(timeout=12.0) as client:
+                cover_path = _download_cover(scored.candidate.cover_url, client)
+
+        query = SearchQuery(
+            clean_title=record.matched_title or scored.candidate.title,
+            author_hint=record.matched_author,
+        )
+        result = MetadataResult(
+            query=query,
+            best=scored,
+            all_candidates=[scored],
+            above_threshold=True,
+            cover_path=cover_path,
+        )
+        return self.force_import(Path(record.current_path), result)
 
     # ------------------------------------------------------------------
     # Core event handler
@@ -330,6 +433,11 @@ class Pipeline:
         record.confidence = result.confidence
         record.matched_title = result.title
         record.matched_author = result.author
+        record.matched_year = int(result.year) if result.year else None
+        record.matched_publisher = result.publisher or None
+        record.matched_isbn = result.isbn
+        record.matched_cover_url = result.best.candidate.cover_url if result.best else None
+        record.matched_metadata_json = _serialize_candidate(result.best) if result.best else None
         self._store.upsert(record)
         self._notifier.send_review_alert(record, result)
         return record
@@ -353,10 +461,16 @@ class Pipeline:
     # ------------------------------------------------------------------
 
     def _get_or_create_record(self, path: Path, media_type: str) -> FileRecord:
+        # Primary lookup: exact ID match (path + mtime hash)
         record_id = FileRecord.make_id(path)
         existing = self._store.get(record_id)
         if existing:
             return existing
+        # Fallback: same file, different mtime (e.g. file moved to review/ and
+        # re-processed — avoids creating a duplicate record)
+        existing_by_path = self._store.get_by_current_path(str(path.resolve()))
+        if existing_by_path:
+            return existing_by_path
         return self._make_record(path, media_type, FileState.INCOMING)
 
     def _make_record(self, path: Path, media_type: str, state: FileState) -> FileRecord:

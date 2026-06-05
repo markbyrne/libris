@@ -11,6 +11,7 @@ import httpx
 
 from ..cleaner import clean_query, extract_isbn
 from ..config import MetadataConfig
+from ..exceptions import RateLimitError
 from .base import MetadataResult, SearchQuery
 from .scorer import build_result
 
@@ -73,8 +74,29 @@ def resolve_metadata(
     else:
         from . import google_books, open_library
         _client = client or httpx.Client(timeout=12.0)
-        google_scored = google_books.fetch(query, api_key=config.google_books_api_key, client=_client)
-        ol_scored = open_library.fetch(query, client=_client)
+
+        google_scored = []
+        try:
+            google_scored = google_books.fetch(
+                query, api_key=config.google_books_api_key, client=_client
+            )
+        except RateLimitError as exc:
+            # Rate limited during automatic pipeline run — treat as zero results so
+            # the file lands in review/ rather than failed/.  The user can then run
+            # `libris rematch` which surfaces the rate limit interactively.
+            log.warning(
+                "metadata.rate_limited",
+                extra={"source": exc.source, "retry_after": exc.retry_after},
+            )
+
+        ol_scored = []
+        try:
+            ol_scored = open_library.fetch(query, client=_client)
+        except RateLimitError as exc:
+            log.warning(
+                "metadata.rate_limited",
+                extra={"source": exc.source, "retry_after": exc.retry_after},
+            )
 
     # ── Fuse & score ─────────────────────────────────────────────────────
     result = build_result(query, google_scored, ol_scored, config.confidence_threshold)

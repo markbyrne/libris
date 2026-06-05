@@ -1,5 +1,9 @@
 """Typed exception hierarchy for libris."""
 
+from __future__ import annotations
+
+from typing import Optional
+
 
 class BookPipelineError(Exception):
     """Base exception for all libris errors."""
@@ -35,3 +39,20 @@ class WatcherError(BookPipelineError):
 
 class NotifierError(BookPipelineError):
     """Raised internally by notifier; always swallowed by the pipeline."""
+
+
+class RateLimitError(BookPipelineError):
+    """Raised when a metadata API returns HTTP 429 Too Many Requests.
+
+    Callers (e.g. the rematch CLI loop) catch this separately from generic
+    fetch errors so they can offer the user a wait/key/skip choice rather
+    than silently returning no results.
+    """
+
+    def __init__(self, source: str, retry_after: Optional[int] = None) -> None:
+        self.source = source          # "google_books" | "open_library"
+        self.retry_after = retry_after  # seconds from Retry-After header, or None
+        msg = f"{source} rate limited"
+        if retry_after:
+            msg += f" (retry after {retry_after}s)"
+        super().__init__(msg)

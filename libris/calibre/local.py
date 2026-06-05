@@ -65,10 +65,13 @@ class LocalCalibre(CalibreBackend):
     def set_cover(self, book_id: int, cover_path: Path) -> None:
         if book_id < 0 or not cover_path.exists():
             return
+        # calibredb has no standalone set_cover subcommand — cover is set via
+        # set_metadata with the --cover flag.
         cmd = [
-            "calibredb", "set_cover",
+            "calibredb", "set_metadata",
+            str(book_id),
+            "--cover", str(cover_path),
             "--with-library", str(self._library),
-            str(book_id), str(cover_path),
         ]
         log.debug("calibre.local.set_cover", extra={"cmd": cmd})
         result = subprocess.run(cmd, capture_output=True, text=True)

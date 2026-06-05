@@ -49,6 +49,15 @@ class FileRecord:
     matched_author: Optional[str] = None
     error_msg: Optional[str] = None
     calibre_book_id: Optional[int] = None   # Calibre library book ID after import
+    # Extra match detail — populated when a file enters review so list-review
+    # can show the user enough context to decide whether the match is correct.
+    matched_year: Optional[int] = None
+    matched_publisher: Optional[str] = None
+    matched_isbn: Optional[str] = None
+    matched_cover_url: Optional[str] = None
+    # Full serialised ScoredCandidate JSON — used by review-accept to import
+    # without hitting the API again.  Set when file enters review.
+    matched_metadata_json: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -69,18 +78,23 @@ class FileRecord:
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS files (
-    id               TEXT PRIMARY KEY,
-    original_path    TEXT NOT NULL,
-    current_path     TEXT NOT NULL,
-    media_type       TEXT NOT NULL,
-    state            TEXT NOT NULL,
-    confidence       REAL,
-    matched_title    TEXT,
-    matched_author   TEXT,
-    error_msg        TEXT,
-    created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL,
-    calibre_book_id  INTEGER
+    id                TEXT PRIMARY KEY,
+    original_path     TEXT NOT NULL,
+    current_path      TEXT NOT NULL,
+    media_type        TEXT NOT NULL,
+    state             TEXT NOT NULL,
+    confidence        REAL,
+    matched_title     TEXT,
+    matched_author    TEXT,
+    error_msg         TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    calibre_book_id   INTEGER,
+    matched_year          INTEGER,
+    matched_publisher     TEXT,
+    matched_isbn          TEXT,
+    matched_cover_url     TEXT,
+    matched_metadata_json TEXT
 );
 """
 
@@ -88,19 +102,26 @@ _UPSERT = """
 INSERT INTO files
     (id, original_path, current_path, media_type, state,
      confidence, matched_title, matched_author, error_msg, calibre_book_id,
+     matched_year, matched_publisher, matched_isbn, matched_cover_url,
+     matched_metadata_json,
      created_at, updated_at)
 VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
-    current_path     = excluded.current_path,
-    media_type       = excluded.media_type,
-    state            = excluded.state,
-    confidence       = excluded.confidence,
-    matched_title    = excluded.matched_title,
-    matched_author   = excluded.matched_author,
-    error_msg        = excluded.error_msg,
-    calibre_book_id  = excluded.calibre_book_id,
-    updated_at       = excluded.updated_at;
+    current_path          = excluded.current_path,
+    media_type            = excluded.media_type,
+    state                 = excluded.state,
+    confidence            = excluded.confidence,
+    matched_title         = excluded.matched_title,
+    matched_author        = excluded.matched_author,
+    error_msg             = excluded.error_msg,
+    calibre_book_id       = excluded.calibre_book_id,
+    matched_year          = excluded.matched_year,
+    matched_publisher     = excluded.matched_publisher,
+    matched_isbn          = excluded.matched_isbn,
+    matched_cover_url     = excluded.matched_cover_url,
+    matched_metadata_json = excluded.matched_metadata_json,
+    updated_at            = excluded.updated_at;
 """
 
 
@@ -122,10 +143,18 @@ class StateStore:
         # Migrate: add calibre_book_id column if this is an older DB.
         # ALTER TABLE always appends to the end — named access in _row_to_record
         # means column order doesn't matter.
-        try:
-            self._conn.execute("ALTER TABLE files ADD COLUMN calibre_book_id INTEGER;")
-        except Exception:
-            pass  # Column already exists — safe to ignore
+        for _migration in [
+            "ALTER TABLE files ADD COLUMN calibre_book_id   INTEGER;",
+            "ALTER TABLE files ADD COLUMN matched_year      INTEGER;",
+            "ALTER TABLE files ADD COLUMN matched_publisher TEXT;",
+            "ALTER TABLE files ADD COLUMN matched_isbn      TEXT;",
+            "ALTER TABLE files ADD COLUMN matched_cover_url     TEXT;",
+            "ALTER TABLE files ADD COLUMN matched_metadata_json TEXT;",
+        ]:
+            try:
+                self._conn.execute(_migration)
+            except Exception:
+                pass  # Column already exists — safe to ignore
 
     # ------------------------------------------------------------------
     # Write
@@ -145,6 +174,11 @@ class StateStore:
             record.matched_author,
             record.error_msg,
             record.calibre_book_id,
+            record.matched_year,
+            record.matched_publisher,
+            record.matched_isbn,
+            record.matched_cover_url,
+            record.matched_metadata_json,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
         ))
@@ -168,6 +202,14 @@ class StateStore:
         ).fetchone()
         return _row_to_record(row) if row else None
 
+    def get_by_current_path(self, path: str) -> Optional[FileRecord]:
+        """Fetch by current_path (most recent if duplicates exist)."""
+        row = self._conn.execute(
+            "SELECT * FROM files WHERE current_path = ? ORDER BY updated_at DESC LIMIT 1",
+            (path,),
+        ).fetchone()
+        return _row_to_record(row) if row else None
+
     def get_by_path(self, path: str) -> Optional[FileRecord]:
         """Fetch by original_path (most recent if duplicates exist)."""
         row = self._conn.execute(
@@ -177,12 +219,24 @@ class StateStore:
         return _row_to_record(row) if row else None
 
     def list_by_state(self, state: FileState) -> list[FileRecord]:
-        """Return all records in a given state, ordered by updated_at desc."""
+        """Return records in a given state, ordered by updated_at desc.
+
+        Deduplicated by current_path — if the same file produced more than one
+        record (e.g. processed twice with different mtimes), only the most
+        recent record is returned.
+        """
         rows = self._conn.execute(
             "SELECT * FROM files WHERE state = ? ORDER BY updated_at DESC",
             (state.value,),
         ).fetchall()
-        return [_row_to_record(r) for r in rows]
+        seen: set[str] = set()
+        result: list[FileRecord] = []
+        for row in rows:
+            r = _row_to_record(row)
+            if r.current_path not in seen:
+                seen.add(r.current_path)
+                result.append(r)
+        return result
 
     def reset_processing(self) -> int:
         """Reset all PROCESSING records back to INCOMING (recover from crash).
@@ -230,6 +284,11 @@ def _row_to_record(row: sqlite3.Row) -> FileRecord:
         matched_author=row["matched_author"],
         error_msg=row["error_msg"],
         calibre_book_id=row["calibre_book_id"],
+        matched_year=row["matched_year"],
+        matched_publisher=row["matched_publisher"],
+        matched_isbn=row["matched_isbn"],
+        matched_cover_url=row["matched_cover_url"],
+        matched_metadata_json=row["matched_metadata_json"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
