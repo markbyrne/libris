@@ -1,8 +1,18 @@
 # Libris
 
-Libris watches a directory for new ebooks and audiobooks, matches them to the correct metadata, and imports them into your [Calibre](https://calibre-ebook.com/) library automatically.
+**Automatic Calibre import with confidence-scored metadata matching.**
 
-It queries Google Books and OpenLibrary independently and scores each match for confidence. Files it's certain about are imported immediately. Files with ambiguous metadata are quarantined for your review rather than silently imported with the wrong author or title.
+If you use Calibre to manage your ebook and audiobook library, you've likely hit these problems:
+- Books imported with the wrong author or title — silently, with no warning
+- Manually dragging files into Calibre one at a time
+- Audiobooks arriving as a folder of MP3 parts with no metadata
+- `calibredb` commands that require you to be at the machine
+
+Libris solves all of this. It watches a directory for new ebooks and audiobooks, automatically matches them to the correct metadata using Google Books and OpenLibrary, converts files to the right format (EPUB for ebooks, M4B with chapter markers for audiobooks), and imports them directly into your Calibre library via `calibredb`.
+
+The key difference from a simple import script: Libris scores each metadata match for confidence. Files it's certain about are imported immediately. Files where the match is ambiguous are quarantined in a review folder and you're notified — so your library is never silently polluted with wrong metadata.
+
+Works with local Calibre installations and with [calibre-web](https://github.com/janeczku/calibre-web) running in Docker. Pairs naturally with self-hosted download managers like LazyLibrarian, Readarr, and similar tools.
 
 ---
 
@@ -222,6 +232,25 @@ UPDATE files SET state='incoming' WHERE state='processing';
 ```
 
 ---
+
+## Roadmap
+
+- [ ] Cover art embedding for M4B audiobooks
+- [ ] Series metadata support (Calibre series + series index)
+- [ ] Automatic retry with backoff for failed imports
+- [ ] Web UI for reviewing and approving low-confidence matches
+- [ ] ISBN lookup as primary metadata source when barcode scanning
+
+---
+
+<!-- TODO: MARKETING
+When making this repo public:
+- Post to r/Calibre and r/selfhosted
+- Post to MobileRead forums (mobileread.com) — largest Calibre community
+- Submit PR to awesome-selfhosted list (github.com/awesome-selfhosted/awesome-selfhosted)
+- Publish to PyPI: pip install libris
+- Add GitHub Sponsors / Ko-fi if there's interest
+-->
 
 ## License
 
