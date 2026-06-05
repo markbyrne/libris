@@ -36,10 +36,9 @@ from .state import FileState, StateStore
 
 
 # ---------------------------------------------------------------------------
-# Config auto-discovery
+# Helpers
 # ---------------------------------------------------------------------------
 
-# Searched in order when --config is not provided.
 _CONFIG_SEARCH_PATHS = [
     Path("config.local.yaml"),
     Path("config.yaml"),
@@ -54,31 +53,57 @@ _CONFIG_OPTION = click.option(
     help="Config file path. Defaults to config.local.yaml in the current directory.",
 )
 
+_WEIGHT_MAX = {"isbn": 0.40, "title": 0.30, "author": 0.20, "year": 0.10}
+
 
 def _resolve_config(config_path: Optional[Path]) -> Path:
-    """Return *config_path* if given, otherwise auto-discover from standard locations.
-
-    Exits with a helpful message if no config file is found.
-    """
+    """Return *config_path* if given, otherwise auto-discover from standard locations."""
     if config_path is not None:
         if not config_path.exists():
-            click.echo(f"❌ Config file not found: {config_path}", err=True)
-            sys.exit(1)
+            _die(f"Config file not found: {config_path}")
         return config_path
 
     for candidate in _CONFIG_SEARCH_PATHS:
         if candidate.exists():
-            click.echo(f"Using config: {candidate.resolve()}")
+            click.echo(click.style(f"Using config: {candidate.resolve()}", dim=True))
             return candidate
 
-    lines = "\n".join(f"  {p}" for p in _CONFIG_SEARCH_PATHS)
-    click.echo(
-        f"❌ No config file found. Tried:\n{lines}\n"
+    tried = "\n".join(f"  {p}" for p in _CONFIG_SEARCH_PATHS)
+    _die(
+        f"No config file found. Tried:\n{tried}\n"
         "Create config.local.yaml (cp config.example.yaml config.local.yaml) "
-        "or pass --config <path>.",
-        err=True,
+        "or pass --config <path>."
     )
+
+
+def _die(msg: str) -> None:
+    """Print an error and exit."""
+    click.echo(f"\n  ❌  {msg}\n", err=True)
     sys.exit(1)
+
+
+def _calibredb_list(query: str, config) -> str:
+    """Run calibredb list and return formatted output. Works in local and docker mode."""
+    if config.calibre.mode == "docker":
+        cmd = [
+            "docker", "exec", config.calibre.docker_container,
+            "calibredb", "list", "--search", query, "--fields", "id,title,authors",
+        ]
+    else:
+        cmd = [
+            "calibredb", "list",
+            "--search", query,
+            "--fields", "id,title,authors",
+            "--with-library", str(config.calibre.library_path),
+        ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        _die(f"calibredb error: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _hr(width: int = 50) -> str:
+    return "  " + "─" * width
 
 
 # ---------------------------------------------------------------------------
@@ -111,15 +136,24 @@ def import_one(file_path: Path, config_path: Optional[Path]) -> None:
     _setup_logging(config.log_level)
     pipeline = Pipeline(config)
     record = pipeline.process_file(file_path.resolve())
-    click.echo(f"Result: {record.state.value}")
+
+    click.echo()
+    status = "✅" if record.state == FileState.IMPORTED else (
+        "🔍" if record.state == FileState.REVIEW else "❌"
+    )
+    click.echo(f"  {status}  {file_path.name}")
+    click.echo(_hr())
+    click.echo(f"  Result:  {record.state.value}")
     if record.matched_title:
-        click.echo(f"Title:  {record.matched_title}")
+        click.echo(f"  Title:   {record.matched_title}")
     if record.matched_author:
-        click.echo(f"Author: {record.matched_author}")
+        click.echo(f"  Author:  {record.matched_author}")
     if record.confidence is not None:
-        click.echo(f"Score:  {record.confidence:.2f}")
+        click.echo(f"  Score:   {record.confidence:.2f}")
     if record.error_msg:
-        click.echo(f"Error:  {record.error_msg}", err=True)
+        click.echo(f"  Error:   {record.error_msg}", err=True)
+    click.echo()
+
     sys.exit(0 if record.state == FileState.IMPORTED else 1)
 
 
@@ -131,10 +165,11 @@ def check_config(config_path: Optional[Path]) -> None:
     try:
         config = load_config(path)
     except Exception as exc:
-        click.echo(f"❌ Config error: {exc}", err=True)
-        sys.exit(1)
+        _die(f"Config error: {exc}")
 
-    click.echo("✅ Config valid\n")
+    click.echo()
+    click.echo("  ✅  Config valid")
+    click.echo(_hr())
     click.echo(f"  Incoming dir:   {config.watcher.incoming_dir}")
     click.echo(f"  Staging dir:    {config.paths.staging_dir}")
     click.echo(f"  Review dir:     {config.paths.review_dir}")
@@ -150,6 +185,7 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  ntfy topic:     {config.ntfy.topic or '(not set)'}")
     click.echo(f"  ntfy enabled:   {config.ntfy.enabled}")
     click.echo(f"  Log level:      {config.log_level}")
+    click.echo()
 
 
 @main.command("list-review")
@@ -162,27 +198,34 @@ def list_review(config_path: Optional[Path]) -> None:
     records = store.list_by_state(FileState.REVIEW)
     store.close()
 
+    click.echo()
     if not records:
-        click.echo("No files in review.")
+        click.echo("  No files in review.")
+        click.echo()
         return
 
-    click.echo(f"{len(records)} file(s) in review:\n")
+    click.echo(f"  {len(records)} file(s) in review")
+    click.echo(_hr())
+    click.echo()
+
     for i, r in enumerate(records, 1):
-        click.echo(f"[{i}] {Path(r.current_path).name}")
         matched = r.matched_title or "(unknown)"
         if r.matched_author:
-            matched += f" by {r.matched_author}"
-        click.echo(f"    Matched: {matched}")
+            matched += f"  by {r.matched_author}"
         conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
-        click.echo(f"    Score:   {conf}")
-        # Show path quoted so it can be copy-pasted directly
-        click.echo(f"    Path:    \"{r.current_path}\"")
+
+        click.echo(f"  [{i}]  {Path(r.current_path).name}")
+        click.echo(f"        Matched:  {matched}")
+        click.echo(f"        Score:    {conf}")
+        click.echo(f"        Path:     \"{r.current_path}\"")
         click.echo()
 
-    click.echo("Accept by ID:    libris review-accept --id <N>")
-    click.echo("Accept all:      libris review-accept --accept-all")
-    click.echo("Accept by path:  libris review-accept \"<path>\"")
-    click.echo("Fix bad match:   libris rematch --id <N>")
+    click.echo(_hr())
+    click.echo("  Accept by ID:    libris review-accept --id <N>")
+    click.echo("  Accept all:      libris review-accept --accept-all")
+    click.echo("  Accept by path:  libris review-accept \"<path>\"")
+    click.echo("  Fix bad match:   libris rematch --id <N>")
+    click.echo()
 
 
 @main.command("review-accept")
@@ -211,36 +254,29 @@ def review_accept(
     config = load_config(path)
     _setup_logging(config.log_level)
 
-    # Validate: exactly one selection method must be provided
     n_methods = sum([file_path is not None, review_id is not None, accept_all])
     if n_methods == 0:
-        click.echo(
-            "❌ Provide one of: FILE_PATH argument, --id N, or --accept-all\n"
-            "Run 'libris list-review' to see queued files and their IDs.",
-            err=True,
+        _die(
+            "Provide one of: FILE_PATH argument, --id N, or --accept-all\n"
+            "  Run 'libris list-review' to see queued files and their IDs."
         )
-        sys.exit(1)
     if n_methods > 1:
-        click.echo("❌ Only one of FILE_PATH, --id, or --accept-all may be used at a time.", err=True)
-        sys.exit(1)
+        _die("Only one of FILE_PATH, --id, or --accept-all may be used at a time.")
 
-    # ── Resolve target path(s) ────────────────────────────────────────
     store = StateStore(config.paths.state_db)
 
     if review_id is not None or accept_all:
         records = store.list_by_state(FileState.REVIEW)
         store.close()
         if not records:
-            click.echo("No files in review queue.")
+            click.echo("\n  No files in review queue.\n")
             return
         if review_id is not None:
             if review_id < 1 or review_id > len(records):
-                click.echo(
-                    f"❌ ID {review_id} out of range — queue has {len(records)} item(s).\n"
-                    "Run 'libris list-review' to see current IDs.",
-                    err=True,
+                _die(
+                    f"ID {review_id} out of range — queue has {len(records)} item(s).\n"
+                    "  Run 'libris list-review' to see current IDs."
                 )
-                sys.exit(1)
             targets = [Path(records[review_id - 1].current_path)]
         else:
             targets = [Path(r.current_path) for r in records]
@@ -248,13 +284,13 @@ def review_accept(
         store.close()
         targets = [file_path.resolve()]
 
-    # ── Process each target ───────────────────────────────────────────
     config.metadata.confidence_threshold = 0.0
     any_failed = False
 
+    click.echo()
     for target in targets:
         if not target.exists():
-            click.echo(f"⚠ Skipping (file not found): {target}", err=True)
+            click.echo(f"  ⚠   Skipping (file not found): {target}", err=True)
             any_failed = True
             continue
 
@@ -265,46 +301,19 @@ def review_accept(
             pipeline._store.cleanup_stale_review(str(target), exclude_id=record.id)
 
         status = "✅" if record.state == FileState.IMPORTED else "❌"
-        click.echo(f"\n{status} {target.name}  [{record.state.value}]")
+        click.echo(f"  {status}  {target.name}  [{record.state.value}]")
         if record.matched_title:
-            click.echo(f"   Title:  {record.matched_title}")
+            click.echo(f"       Title:   {record.matched_title}")
         if record.matched_author:
-            click.echo(f"   Author: {record.matched_author}")
+            click.echo(f"       Author:  {record.matched_author}")
         if record.confidence is not None:
-            click.echo(f"   Score:  {record.confidence:.2f} (threshold overridden)")
+            click.echo(f"       Score:   {record.confidence:.2f} (threshold overridden)")
         if record.error_msg:
-            click.echo(f"   Error:  {record.error_msg}", err=True)
+            click.echo(f"       Error:   {record.error_msg}", err=True)
             any_failed = True
+        click.echo()
 
     sys.exit(1 if any_failed else 0)
-
-
-def _calibredb_list(query: str, config) -> str:
-    """Run calibredb list with *query* and return the formatted output string.
-
-    Works in both local and docker modes.  Returns an empty string if no
-    books match; raises SystemExit on calibredb error.
-    """
-    if config.calibre.mode == "docker":
-        cmd = [
-            "docker", "exec", config.calibre.docker_container,
-            "calibredb", "list",
-            "--search", query,
-            "--fields", "id,title,authors",
-        ]
-    else:
-        cmd = [
-            "calibredb", "list",
-            "--search", query,
-            "--fields", "id,title,authors",
-            "--with-library", str(config.calibre.library_path),
-        ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        click.echo(f"❌ calibredb error: {result.stderr.strip()}", err=True)
-        sys.exit(1)
-    return result.stdout.strip()
 
 
 @main.command("search")
@@ -325,7 +334,16 @@ def search(query: str, config_path: Optional[Path]) -> None:
     path = _resolve_config(config_path)
     config = load_config(path)
     output = _calibredb_list(query, config)
-    click.echo(output if output else f"No books found matching: {query}")
+
+    click.echo()
+    if output:
+        click.echo(f"  Results for \"{query}\"")
+        click.echo(_hr())
+        for line in output.splitlines():
+            click.echo(f"  {line}")
+    else:
+        click.echo(f"  No books found matching: {query}")
+    click.echo()
 
 
 @main.command("rematch")
@@ -351,50 +369,45 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
     config = load_config(path)
     _setup_logging(config.log_level)
 
-    # ── Load review record ────────────────────────────────────────────
     store = StateStore(config.paths.state_db)
     records = store.list_by_state(FileState.REVIEW)
     store.close()
 
     if not records:
-        click.echo("No files in review queue.")
+        click.echo("\n  No files in review queue.\n")
         return
 
     if review_id < 1 or review_id > len(records):
-        click.echo(
-            f"❌ ID {review_id} out of range — queue has {len(records)} item(s).\n"
-            "Run 'libris list-review' to see current IDs.",
-            err=True,
+        _die(
+            f"ID {review_id} out of range — queue has {len(records)} item(s).\n"
+            "  Run 'libris list-review' to see current IDs."
         )
-        sys.exit(1)
 
     record = records[review_id - 1]
     file_path = Path(record.current_path)
 
     if not file_path.exists():
-        click.echo(f"❌ File not found: {file_path}", err=True)
-        sys.exit(1)
+        _die(f"File not found: {file_path}")
 
-    # ── Header ────────────────────────────────────────────────────────
-    click.echo(f"\nFile:    {file_path.name}")
+    # Header
+    click.echo()
+    click.echo(f"  Rematching: {file_path.name}")
     if record.matched_title:
         conf_str = f"{record.confidence:.2f}" if record.confidence is not None else "n/a"
-        author_str = f" by {record.matched_author}" if record.matched_author else ""
-        click.echo(f"Current: {record.matched_title}{author_str}  (score: {conf_str})")
+        author_str = f"  by {record.matched_author}" if record.matched_author else ""
+        click.echo(f"  Current:    {record.matched_title}{author_str}  (score: {conf_str})")
     click.echo()
 
-    # Reconstruct author/year hints from original filename for scoring
     stem = file_path.stem
     author_hint = _extract_author_hint(stem)
     year_hint = _extract_year(stem)
     current_query = _clean_query(stem) or stem
     current_source = source
 
-    # ── Interactive search loop ───────────────────────────────────────
     from .metadata import google_books, open_library
 
     while True:
-        # Prompt for query and source (pre-filled with current values)
+        click.echo(_hr())
         query_str = click.prompt("  Query", default=current_query)
         source_str = click.prompt(
             "  Source",
@@ -402,16 +415,14 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             type=click.Choice(["all", "google", "openlibrary"], case_sensitive=False),
         )
         click.echo()
+        click.echo("  Searching…")
 
-        # Build query object — use original filename hints for author/year scoring
         search_query = SearchQuery(
             clean_title=query_str,
             author_hint=author_hint,
             year_hint=year_hint,
         )
 
-        # Fetch from selected sources
-        click.echo("  Searching…")
         with httpx.Client(timeout=12.0) as client:
             google_results: list = []
             ol_results: list = []
@@ -424,7 +435,6 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             if source_str in ("all", "openlibrary"):
                 ol_results = open_library.fetch(search_query, client=client)
 
-        # Merge and rank by confidence, keep top 3
         all_results = sorted(
             google_results + ol_results,
             key=lambda r: r.confidence,
@@ -432,63 +442,58 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
         )[:3]
 
         if not all_results:
-            click.echo("  No results found — try a different query.\n")
+            click.echo("  No results found — try a different query.")
+            click.echo()
             current_query = query_str
             current_source = source_str
             continue
 
-        # Display results with score breakdown
         click.echo()
-        _WEIGHT_MAX = {"isbn": 0.40, "title": 0.30, "author": 0.20, "year": 0.10}
         for i, scored in enumerate(all_results, 1):
             c = scored.candidate
             bd = scored.score_breakdown
             source_label = c.source.replace("_", " ").title()
             authors = ", ".join(c.authors) if c.authors else "Unknown"
 
-            click.echo(f"  [{i}] {c.title}")
-            click.echo(f"      {authors}  ·  {source_label}  ·  score {scored.confidence:.2f}")
+            click.echo(f"  [{i}]  {c.title}")
+            click.echo(f"        {authors}  ·  {source_label}  ·  score {scored.confidence:.2f}")
 
-            # Details line
             details = [p for p in [
                 c.publisher,
                 str(c.published_year) if c.published_year else None,
                 f"ISBN {c.isbn}" if c.isbn else None,
             ] if p]
             if details:
-                click.echo(f"      {' · '.join(details)}")
+                click.echo(f"        {' · '.join(details)}")
 
-            # Score breakdown line
-            breakdown_parts = [
+            bd_parts = [
                 f"{k} {bd.get(k, 0.0):.2f}/{mx:.2f}"
                 for k, mx in _WEIGHT_MAX.items()
             ]
             if bd.get("agreement_bonus"):
-                breakdown_parts.append(f"agreement +{bd['agreement_bonus']:.2f}")
-            click.echo(f"      Breakdown: {' · '.join(breakdown_parts)}")
+                bd_parts.append(f"agreement +{bd['agreement_bonus']:.2f}")
+            click.echo(f"        Breakdown:  {' · '.join(bd_parts)}")
             click.echo()
 
-        # Selection prompt
-        click.echo("  [1/2/3] import  [r] refine query  [q] quit")
+        click.echo(_hr())
+        click.echo("  [1/2/3] import    [r] refine query    [q] quit")
         choice = click.prompt("  Choice", default="1").strip().lower()
         click.echo()
 
         if choice in ("1", "2", "3"):
             idx = int(choice) - 1
             if idx >= len(all_results):
-                click.echo(f"  ❌ Only {len(all_results)} result(s) shown.")
+                click.echo(f"  Only {len(all_results)} result(s) shown.\n")
                 continue
 
             selected = all_results[idx]
 
-            # Download cover if available
             cover_path = None
             if config.output.embed_cover_art and selected.candidate.cover_url:
                 from .metadata.resolver import _download_cover
                 with httpx.Client(timeout=12.0) as client:
                     cover_path = _download_cover(selected.candidate.cover_url, client)
 
-            # Build a MetadataResult from the chosen candidate
             result = MetadataResult(
                 query=search_query,
                 best=selected,
@@ -497,7 +502,6 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                 cover_path=cover_path,
             )
 
-            # Import via pipeline (skips API lookup, uses result directly)
             pipeline = Pipeline(config)
             imported_record = pipeline.force_import(file_path, result)
 
@@ -505,22 +509,25 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                 pipeline._store.cleanup_stale_review(
                     str(file_path), exclude_id=imported_record.id
                 )
-                click.echo(f"  ✅ Imported: {selected.candidate.title}")
+                click.echo(f"  ✅  {selected.candidate.title}")
                 if selected.candidate.authors:
-                    click.echo(f"     Author:   {', '.join(selected.candidate.authors)}")
-                click.echo(f"     Score:    {selected.confidence:.2f} (manually selected)")
+                    click.echo(f"      Author:  {', '.join(selected.candidate.authors)}")
+                click.echo(f"      Score:   {selected.confidence:.2f} (manually selected)")
             else:
-                click.echo(f"  ❌ Import failed: {imported_record.error_msg}", err=True)
+                click.echo(f"  ❌  Import failed: {imported_record.error_msg}", err=True)
                 sys.exit(1)
+            click.echo()
             return
 
         elif choice == "r":
             current_query = query_str
             current_source = source_str
+            click.echo()
             continue
 
         elif choice == "q":
             click.echo("  Cancelled — file remains in review.")
+            click.echo()
             return
 
         else:
@@ -555,93 +562,89 @@ def revert_import(
     config = load_config(path)
     _setup_logging(config.log_level)
 
-    # ── Resolve book_id (direct arg or interactive search) ────────────
     if book_id is None and search_query is None:
-        click.echo(
-            "❌ Provide a BOOK_ID argument or use --search <query>.\n"
-            "Example: libris revert-import --search \"Caliban\"",
-            err=True,
+        _die(
+            "Provide a BOOK_ID argument or use --search <query>.\n"
+            "  Example: libris revert-import --search \"Caliban\""
         )
-        sys.exit(1)
+
+    click.echo()
 
     if search_query is not None:
         output = _calibredb_list(search_query, config)
         if not output:
-            click.echo(f"No books found matching: {search_query}")
+            click.echo(f"  No books found matching: {search_query}\n")
             sys.exit(0)
-        click.echo(f"\nResults for \"{search_query}\":\n")
-        click.echo(output)
+        click.echo(f"  Results for \"{search_query}\"")
+        click.echo(_hr())
+        for line in output.splitlines():
+            click.echo(f"  {line}")
         click.echo()
-        book_id = click.prompt("Enter Calibre book ID to revert (or Ctrl-C to cancel)", type=int)
+        book_id = click.prompt("  Enter Calibre book ID to revert (or Ctrl-C to cancel)", type=int)
         click.echo()
 
     calibre = get_calibre(config.calibre)
     store = StateStore(config.paths.state_db)
 
-    # ── Export book files from Calibre ────────────────────────────────
     review_dir = config.paths.review_dir
     review_dir.mkdir(parents=True, exist_ok=True)
 
+    # Export
     with tempfile.TemporaryDirectory(prefix="libris_revert_") as tmp:
         tmp_path = Path(tmp)
         try:
             exported = calibre.export_book(book_id, tmp_path)
         except Exception as exc:
-            click.echo(f"❌ Export failed: {exc}", err=True)
             store.close()
-            sys.exit(1)
+            _die(f"Export failed: {exc}")
 
         if not exported:
-            click.echo(
-                f"❌ calibredb export returned no files for book ID {book_id}.\n"
-                "Check that the ID is correct and the book has a stored format.",
-                err=True,
-            )
             store.close()
-            sys.exit(1)
+            _die(
+                f"calibredb export returned no files for book ID {book_id}.\n"
+                "  Check that the ID is correct and the book has a stored format."
+            )
 
         moved: list[Path] = []
         for f in exported:
             dest = review_dir / f.name
-            # Avoid overwriting an existing file in review/
             if dest.exists():
                 dest = review_dir / f"{f.stem}_reverted{f.suffix}"
             shutil.move(str(f), str(dest))
             moved.append(dest)
-            click.echo(f"  → review/: {dest.name}")
+            click.echo(f"  →  review/{dest.name}")
 
-    # ── Remove from Calibre ───────────────────────────────────────────
+    # Remove from Calibre
     try:
         calibre.remove_book(book_id)
-        click.echo(f"Removed book {book_id} from Calibre library.")
+        click.echo(f"  Removed book {book_id} from Calibre library.")
     except Exception as exc:
+        store.close()
         click.echo(
-            f"⚠ Calibre remove failed: {exc}\n"
-            "Files are in review/ but the book is still in Calibre — remove it manually.",
+            f"\n  ⚠   Calibre remove failed: {exc}\n"
+            "  Files are in review/ but the book is still in Calibre — remove it manually.\n",
             err=True,
         )
-        store.close()
         sys.exit(1)
 
-    # ── Update state DB ───────────────────────────────────────────────
+    # Update state DB
     record = store.get_by_calibre_id(book_id)
     if record:
         record.state = FileState.REVIEW
         record.current_path = str(moved[0]) if moved else record.current_path
         record.error_msg = None
         store.upsert(record)
-        click.echo(
-            f"State updated: {record.matched_title or Path(record.original_path).name} → REVIEW"
-        )
+        click.echo(f"  State updated: {record.matched_title or Path(record.original_path).name} → REVIEW")
     else:
         click.echo(
-            "⚠ No state record found for this Calibre ID "
-            "(book may have been imported before this version of Libris). "
-            "DB not updated — files are in review/ regardless."
+            "  ⚠   No state record found for this Calibre ID "
+            "(book may have been imported before this version of Libris)."
         )
 
     store.close()
-    click.echo("\n✅ Done. Run 'libris list-review' to see the queued file.")
+    click.echo()
+    click.echo("  ✅  Done. Run 'libris list-review' to see the queued file.")
+    click.echo()
 
 
 @main.command("reset")
@@ -658,11 +661,13 @@ def reset(config_path: Optional[Path]) -> None:
     count = store.reset_processing()
     store.close()
 
+    click.echo()
     if count == 0:
-        click.echo("No stuck records found — nothing to reset.")
+        click.echo("  No stuck records found — nothing to reset.")
     else:
-        click.echo(f"Reset {count} stuck PROCESSING record(s) to INCOMING.")
-        click.echo("Re-run 'libris import-one' or 'libris run' to reprocess them.")
+        click.echo(f"  ✅  Reset {count} stuck PROCESSING record(s) to INCOMING.")
+        click.echo("      Re-run 'libris import-one' or 'libris run' to reprocess them.")
+    click.echo()
 
 
 # ---------------------------------------------------------------------------
