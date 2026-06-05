@@ -52,7 +52,7 @@ def fetch(
 
 
 def _build_params(query: SearchQuery) -> dict:
-    params: dict = {"limit": 5, "fields": "title,author_name,isbn,first_publish_year,publisher"}
+    params: dict = {"limit": 5, "fields": "title,author_name,isbn,first_publish_year,publisher,language,subject,cover_i"}
     if query.isbn:
         params["isbn"] = query.isbn
     else:
@@ -83,6 +83,19 @@ def _parse_response(data: dict) -> list[BookCandidate]:
         publishers = doc.get("publisher") or []
         publisher = publishers[0] if publishers else None
 
+        # Cover image via OpenLibrary cover API
+        cover_i = doc.get("cover_i")
+        cover_url = f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg" if cover_i else None
+        # Fallback: use ISBN if available
+        if not cover_url and isbn_13:
+            cover_url = f"https://covers.openlibrary.org/b/isbn/{isbn_13}-L.jpg"
+
+        # Language: OpenLibrary returns codes like ["/languages/eng"]
+        languages = doc.get("language") or []
+        language = languages[0].split("/")[-1] if languages else None
+
+        subjects = doc.get("subject") or []
+
         candidates.append(BookCandidate(
             title=title,
             authors=authors,
@@ -90,6 +103,9 @@ def _parse_response(data: dict) -> list[BookCandidate]:
             isbn_10=isbn_10,
             published_year=year,
             publisher=publisher,
+            language=language,
+            categories=subjects[:5],  # cap at 5 subjects
+            cover_url=cover_url,
             source="open_library",
             raw_response=doc,
         ))

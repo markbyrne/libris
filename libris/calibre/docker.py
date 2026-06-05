@@ -20,8 +20,9 @@ from pathlib import Path
 
 from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
+from ..metadata.base import MetadataResult
 from .base import CalibreBackend
-from .local import _parse_book_id
+from .local import _metadata_flags, _parse_book_id
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +63,32 @@ class DockerCalibre(CalibreBackend):
         book_id = _parse_book_id(result.stdout)
         log.info("calibre.docker.added", extra={"file": str(file_path), "book_id": book_id})
         return book_id
+
+    def set_metadata(self, book_id: int, result: MetadataResult) -> None:
+        if book_id < 0:
+            return
+        cmd = ["docker", "exec", self._container, "calibredb", "set_metadata", str(book_id)]
+        for flag in _metadata_flags(result):
+            cmd += flag
+        log.debug("calibre.docker.set_metadata", extra={"cmd": cmd})
+        result_proc = subprocess.run(cmd, capture_output=True, text=True)
+        if result_proc.returncode != 0:
+            log.warning("calibre.docker.set_metadata_failed", extra={"stderr": result_proc.stderr})
+
+    def set_cover(self, book_id: int, cover_path: Path) -> None:
+        if book_id < 0 or not cover_path.exists():
+            return
+        container_path = self._translate(cover_path)
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "set_cover", str(book_id), container_path,
+        ]
+        log.debug("calibre.docker.set_cover", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.docker.set_cover_failed", extra={"stderr": result.stderr})
+        else:
+            log.info("calibre.docker.cover_set", extra={"book_id": book_id})
 
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         container_input = self._translate(input_path)

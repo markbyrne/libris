@@ -14,6 +14,7 @@ from libris.config import (
     Config,
     MetadataConfig,
     NtfyConfig,
+    OutputConfig,
     PathsConfig,
     WatcherConfig,
 )
@@ -48,6 +49,12 @@ def tmp_config(tmp_path: Path) -> Config:
         metadata=MetadataConfig(
             confidence_threshold=0.75,
             mock_mode=True,
+            overwrite_existing=True,
+        ),
+        output=OutputConfig(
+            preferred_ebook_format="epub",
+            preferred_audio_format="m4b",
+            embed_cover_art=False,   # no HTTP in unit tests
         ),
         ntfy=NtfyConfig(
             topic="test-topic",
@@ -76,6 +83,11 @@ def config_yaml(tmp_path: Path) -> Path:
         metadata:
           confidence_threshold: 0.75
           mock_mode: true
+          overwrite_existing: true
+        output:
+          preferred_ebook_format: epub
+          preferred_audio_format: m4b
+          embed_cover_art: false
         ntfy:
           topic: test
           enabled: false

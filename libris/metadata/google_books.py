@@ -87,6 +87,20 @@ def _parse_response(data: dict) -> list[BookCandidate]:
         if year_raw and len(year_raw) >= 4 and year_raw[:4].isdigit():
             year = int(year_raw[:4])
 
+        # Cover image — prefer the largest available
+        image_links = info.get("imageLinks", {})
+        cover_url = (
+            image_links.get("large")
+            or image_links.get("medium")
+            or image_links.get("thumbnail")
+            or image_links.get("smallThumbnail")
+        )
+        # Force HTTPS and request larger size
+        if cover_url:
+            cover_url = cover_url.replace("http://", "https://")
+            if "zoom=" in cover_url:
+                cover_url = cover_url.replace("zoom=1", "zoom=3")
+
         candidates.append(BookCandidate(
             title=title,
             authors=info.get("authors") or [],
@@ -94,6 +108,10 @@ def _parse_response(data: dict) -> list[BookCandidate]:
             isbn_10=isbn_10,
             published_year=year,
             publisher=info.get("publisher"),
+            description=info.get("description"),
+            language=info.get("language"),
+            categories=info.get("categories") or [],
+            cover_url=cover_url,
             source="google_books",
             raw_response=item,
         ))

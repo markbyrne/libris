@@ -45,6 +45,14 @@ class MetadataConfig:
     confidence_threshold: float = 0.75
     google_books_api_key: str | None = None   # None = unauthenticated (60 req/min)
     mock_mode: bool = False                    # True = return fixture data, no HTTP
+    overwrite_existing: bool = True            # always overwrite embedded metadata
+
+
+@dataclass
+class OutputConfig:
+    preferred_ebook_format: str = "epub"      # epub | mobi
+    preferred_audio_format: str = "m4b"       # m4b (only recommended option)
+    embed_cover_art: bool = True              # download and embed cover images
 
 
 @dataclass
@@ -65,6 +73,7 @@ class Config:
     paths: PathsConfig
     calibre: CalibreConfig
     metadata: MetadataConfig
+    output: OutputConfig
     ntfy: NtfyConfig
     log_level: str = "INFO"
 
@@ -143,6 +152,10 @@ def load_config(config_path: Path) -> Config:
         google_books_api_key=os.environ.get("LIBRIS_METADATA_GOOGLE_BOOKS_API_KEY")
                               or metadata_raw.get("google_books_api_key"),
         mock_mode=_bool_env("LIBRIS_METADATA_MOCK_MODE", metadata_raw.get("mock_mode", False)),
+        overwrite_existing=_bool_env(
+            "LIBRIS_METADATA_OVERWRITE_EXISTING",
+            metadata_raw.get("overwrite_existing", True),
+        ),
     )
 
     if not (0.0 <= metadata.confidence_threshold <= 1.0):
@@ -150,6 +163,22 @@ def load_config(config_path: Path) -> Config:
             f"metadata.confidence_threshold must be between 0.0 and 1.0, "
             f"got: {metadata.confidence_threshold}"
         )
+
+    # ---- output ----
+    output_raw = raw.get("output", {})
+    preferred_ebook = os.environ.get("LIBRIS_OUTPUT_PREFERRED_EBOOK_FORMAT") \
+                      or output_raw.get("preferred_ebook_format", "epub")
+    preferred_audio = os.environ.get("LIBRIS_OUTPUT_PREFERRED_AUDIO_FORMAT") \
+                      or output_raw.get("preferred_audio_format", "m4b")
+    if preferred_ebook not in ("epub", "mobi"):
+        raise ConfigError(f"output.preferred_ebook_format must be 'epub' or 'mobi', got: {preferred_ebook!r}")
+    if preferred_audio not in ("m4b",):
+        raise ConfigError(f"output.preferred_audio_format must be 'm4b', got: {preferred_audio!r}")
+    output = OutputConfig(
+        preferred_ebook_format=preferred_ebook,
+        preferred_audio_format=preferred_audio,
+        embed_cover_art=_bool_env("LIBRIS_OUTPUT_EMBED_COVER_ART", output_raw.get("embed_cover_art", True)),
+    )
 
     # ---- ntfy ----
     ntfy_raw = raw.get("ntfy", {})
@@ -169,6 +198,7 @@ def load_config(config_path: Path) -> Config:
         paths=paths,
         calibre=calibre,
         metadata=metadata,
+        output=output,
         ntfy=ntfy,
         log_level=log_level.upper(),
     )

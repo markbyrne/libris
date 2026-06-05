@@ -24,6 +24,7 @@ def resolve_metadata(
     filename: str,
     config: MetadataConfig,
     client: Optional[httpx.Client] = None,
+    embed_cover: bool = True,
 ) -> MetadataResult:
     """Resolve book metadata from a filename.
 
@@ -78,6 +79,11 @@ def resolve_metadata(
     # ── Fuse & score ─────────────────────────────────────────────────────
     result = build_result(query, google_scored, ol_scored, config.confidence_threshold)
 
+    # ── Download cover art ───────────────────────────────────────────────
+    if embed_cover and result.best and result.best.candidate.cover_url and not config.mock_mode:
+        _client = client or httpx.Client(timeout=12.0)
+        result.cover_path = _download_cover(result.best.candidate.cover_url, _client)
+
     log.info(
         "metadata.resolved",
         extra={
@@ -86,10 +92,31 @@ def resolve_metadata(
             "best_author": result.author,
             "confidence": f"{result.confidence:.2f}",
             "above_threshold": result.above_threshold,
+            "has_cover": result.cover_path is not None,
         },
     )
 
     return result
+
+
+def _download_cover(url: str, client: httpx.Client) -> Optional[Path]:
+    """Download cover image to a temp file. Returns path or None on failure."""
+    import tempfile
+    try:
+        response = client.get(url, timeout=10.0, follow_redirects=True)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        ext = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
+        fd, path_str = tempfile.mkstemp(suffix=ext, prefix="libris_cover_")
+        import os
+        os.close(fd)
+        cover_path = Path(path_str)
+        cover_path.write_bytes(response.content)
+        log.debug("metadata.cover_downloaded", extra={"url": url, "path": str(cover_path)})
+        return cover_path
+    except Exception as exc:
+        log.warning("metadata.cover_download_failed", extra={"url": url, "error": str(exc)})
+        return None
 
 
 # ---------------------------------------------------------------------------

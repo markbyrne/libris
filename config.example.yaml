@@ -44,9 +44,22 @@ metadata:
   # Optional Google Books API key (unauthenticated = ~60 req/min)
   google_books_api_key: null
 
+  # Always overwrite embedded metadata with API results (recommended: true)
+  overwrite_existing: true
+
   # mock_mode: true disables all HTTP calls and returns empty results.
   # Useful for testing the pipeline without hitting real APIs.
   mock_mode: false
+
+output:
+  # Preferred ebook format for import: epub | mobi
+  preferred_ebook_format: epub
+
+  # Preferred audiobook format: m4b
+  preferred_audio_format: m4b
+
+  # Download and embed cover art from Google Books / OpenLibrary
+  embed_cover_art: true
 
 ntfy:
   # ntfy.sh topic name (required for notifications)

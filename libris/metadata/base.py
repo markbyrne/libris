@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 
@@ -16,7 +17,13 @@ class BookCandidate:
     isbn_10: Optional[str] = None
     published_year: Optional[int] = None
     publisher: Optional[str] = None
-    source: str = ""          # "google_books" | "open_library"
+    description: Optional[str] = None      # synopsis / back-cover text
+    language: Optional[str] = None         # ISO 639-1 code e.g. "en"
+    series: Optional[str] = None           # series name
+    series_index: Optional[float] = None   # position in series
+    cover_url: Optional[str] = None        # remote URL for cover image
+    categories: list[str] = field(default_factory=list)
+    source: str = ""                       # "google_books" | "open_library"
     raw_response: dict = field(default_factory=dict, repr=False)
 
     @property
@@ -63,12 +70,13 @@ class MetadataResult:
     best: Optional[ScoredCandidate]
     all_candidates: list[ScoredCandidate] = field(default_factory=list)
     above_threshold: bool = False
+    cover_path: Optional[Path] = None      # downloaded cover image (temp file)
+
+    # ── Convenience accessors ─────────────────────────────────────────────────
 
     @property
     def title(self) -> str:
-        if self.best:
-            return self.best.candidate.title
-        return self.query.clean_title
+        return self.best.candidate.title if self.best else self.query.clean_title
 
     @property
     def author(self) -> str:
@@ -81,6 +89,30 @@ class MetadataResult:
         if self.best and self.best.candidate.published_year:
             return str(self.best.candidate.published_year)
         return str(self.query.year_hint) if self.query.year_hint else ""
+
+    @property
+    def publisher(self) -> str:
+        return self.best.candidate.publisher or "" if self.best else ""
+
+    @property
+    def description(self) -> str:
+        return self.best.candidate.description or "" if self.best else ""
+
+    @property
+    def language(self) -> str:
+        return self.best.candidate.language or "" if self.best else ""
+
+    @property
+    def series(self) -> Optional[str]:
+        return self.best.candidate.series if self.best else None
+
+    @property
+    def series_index(self) -> Optional[float]:
+        return self.best.candidate.series_index if self.best else None
+
+    @property
+    def isbn(self) -> Optional[str]:
+        return self.best.candidate.isbn if self.best else None
 
     @property
     def confidence(self) -> float:

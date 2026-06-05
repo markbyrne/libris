@@ -173,7 +173,11 @@ class Pipeline:
     ) -> FileRecord:
         """Resolve metadata, embed tags, and import to Calibre."""
         # ── Metadata ──────────────────────────────────────────────────
-        result = resolve_metadata(m4b_path.stem, self.config.metadata)
+        result = resolve_metadata(
+            m4b_path.stem,
+            self.config.metadata,
+            embed_cover=self.config.output.embed_cover_art,
+        )
         record.matched_title = result.title
         record.matched_author = result.author
         record.confidence = result.confidence
@@ -186,11 +190,20 @@ class Pipeline:
             return self._mark_review(record, result, m4b_path)
 
         # ── Tag ───────────────────────────────────────────────────────
-        audio_tag.embed_metadata(m4b_path, result)
+        audio_tag.embed_metadata(
+            m4b_path,
+            result,
+            overwrite=self.config.metadata.overwrite_existing,
+        )
 
         # ── Import ────────────────────────────────────────────────────
         book_id = self._calibre.add_book(m4b_path)
         log.info("pipeline.audio.imported", extra={"book_id": book_id, "title": result.title})
+
+        # ── Full metadata + cover in Calibre ──────────────────────────
+        self._calibre.set_metadata(book_id, result)
+        if self.config.output.embed_cover_art and result.cover_path:
+            self._calibre.set_cover(book_id, result.cover_path)
 
         return self._mark_imported(record, m4b_path, original_path, result)
 
@@ -208,10 +221,30 @@ class Pipeline:
             log.info("pipeline.ebook.converting", extra={"from": ext, "file": str(path)})
             epub_path = ebook_conv.to_epub(path, self._calibre)
 
+        # ── Metadata lookup for ebooks ────────────────────────────────
+        result = resolve_metadata(
+            epub_path.stem,
+            self.config.metadata,
+            embed_cover=self.config.output.embed_cover_art,
+        )
+        record.matched_title = result.title
+        record.matched_author = result.author
+        record.confidence = result.confidence
+
+        if not result.above_threshold:
+            log.info("pipeline.ebook.low_confidence",
+                     extra={"confidence": result.confidence, "title": result.title})
+            return self._mark_review(record, result, epub_path)
+
         book_id = self._calibre.add_book(epub_path)
         log.info("pipeline.ebook.imported", extra={"book_id": book_id, "file": str(epub_path)})
 
-        return self._mark_imported(record, epub_path, path, result=None)
+        # ── Full metadata + cover in Calibre ──────────────────────────
+        self._calibre.set_metadata(book_id, result)
+        if self.config.output.embed_cover_art and result.cover_path:
+            self._calibre.set_cover(book_id, result.cover_path)
+
+        return self._mark_imported(record, epub_path, path, result)
 
     # ------------------------------------------------------------------
     # State transition helpers
@@ -235,6 +268,10 @@ class Pipeline:
                 shutil.rmtree(original_path, ignore_errors=True)
             else:
                 original_path.unlink(missing_ok=True)
+
+        # Clean up temp cover file
+        if result and result.cover_path and result.cover_path.exists():
+            result.cover_path.unlink(missing_ok=True)
 
         record.state = FileState.IMPORTED
         self._store.upsert(record)

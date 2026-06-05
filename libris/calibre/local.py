@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
+from ..metadata.base import MetadataResult
 from .base import CalibreBackend
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,33 @@ class LocalCalibre(CalibreBackend):
         log.info("calibre.local.added", extra={"file": str(file_path), "book_id": book_id})
         return book_id
 
+    def set_metadata(self, book_id: int, result: MetadataResult) -> None:
+        if book_id < 0:
+            log.warning("calibre.local.set_metadata_skipped", extra={"reason": "unknown book_id"})
+            return
+        cmd = ["calibredb", "set_metadata", str(book_id), "--with-library", str(self._library)]
+        for flag in _metadata_flags(result):
+            cmd += flag
+        log.debug("calibre.local.set_metadata", extra={"cmd": cmd})
+        result_proc = subprocess.run(cmd, capture_output=True, text=True)
+        if result_proc.returncode != 0:
+            log.warning("calibre.local.set_metadata_failed", extra={"stderr": result_proc.stderr})
+
+    def set_cover(self, book_id: int, cover_path: Path) -> None:
+        if book_id < 0 or not cover_path.exists():
+            return
+        cmd = [
+            "calibredb", "set_cover",
+            "--with-library", str(self._library),
+            str(book_id), str(cover_path),
+        ]
+        log.debug("calibre.local.set_cover", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.local.set_cover_failed", extra={"stderr": result.stderr})
+        else:
+            log.info("calibre.local.cover_set", extra={"book_id": book_id})
+
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         cmd = ["ebook-convert", str(input_path), str(output_path)]
         log.debug("calibre.local.convert", extra={"cmd": cmd})
@@ -57,6 +85,24 @@ class LocalCalibre(CalibreBackend):
                 f"ebook-convert failed (rc={result.returncode}): {result.stderr.strip()}"
             )
         log.info("calibre.local.converted", extra={"output": str(output_path)})
+
+
+def _metadata_flags(result: MetadataResult) -> list[list[str]]:
+    """Build --field flags for calibredb set_metadata."""
+    flags = []
+    if result.publisher:
+        flags.append(["--field", f"publisher:{result.publisher}"])
+    if result.description:
+        flags.append(["--field", f"comments:{result.description}"])
+    if result.language:
+        flags.append(["--field", f"languages:{result.language}"])
+    if result.isbn:
+        flags.append(["--field", f"identifiers:isbn:{result.isbn}"])
+    if result.series:
+        flags.append(["--field", f"series:{result.series}"])
+    if result.series_index is not None:
+        flags.append(["--field", f"series_index:{result.series_index}"])
+    return flags
 
 
 def _parse_book_id(stdout: str) -> int:

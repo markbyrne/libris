@@ -27,6 +27,9 @@ def minimal_yaml(tmp_path):
           library_path: {lib}
         metadata:
           confidence_threshold: 0.75
+        output:
+          preferred_ebook_format: epub
+          embed_cover_art: false
         ntfy:
           topic: testpipeline
         log_level: INFO
