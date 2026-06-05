@@ -113,6 +113,16 @@ def _hr(width: int = 50) -> str:
     return "  " + "─" * width
 
 
+def _has_match(record) -> bool:
+    """Return True if the record has a real API-sourced metadata candidate.
+
+    A record with no stored JSON means the pipeline found zero API results
+    (rate limited, unrecognised title, etc.) — review-accept should be
+    blocked until the user runs rematch to find a candidate.
+    """
+    return record.matched_metadata_json is not None
+
+
 def _hyperlink(url: str, text: str) -> str:
     """Wrap text in an OSC 8 terminal hyperlink (supported by iTerm2, Terminal, Warp, etc.)."""
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
@@ -353,28 +363,32 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo()
 
     for i, r in enumerate(records, 1):
-        matched = r.matched_title or "(unknown)"
-        if r.matched_author:
-            matched += f"  by {r.matched_author}"
-        conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
-
-        # Build the publication detail line from whatever we have stored
-        pub_parts = []
-        if r.matched_year:
-            pub_parts.append(str(r.matched_year))
-        if r.matched_publisher:
-            pub_parts.append(r.matched_publisher)
-        if r.matched_isbn:
-            pub_parts.append(f"ISBN {r.matched_isbn}")
-
         click.echo(f"  [{i}]  {Path(r.current_path).name}")
-        click.echo(f"        Matched:  {matched}")
-        click.echo(f"        Score:    {conf}")
-        if pub_parts:
-            click.echo(f"        Info:     {' · '.join(pub_parts)}")
-        if r.matched_cover_url:
-            link = _hyperlink(r.matched_cover_url, "View cover ↗")
-            click.echo(f"        Cover:    {link}")
+
+        if not _has_match(r):
+            click.echo(click.style("        [!] No match found", fg="yellow"))
+        else:
+            matched = r.matched_title or "(unknown)"
+            if r.matched_author:
+                matched += f"  by {r.matched_author}"
+            conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
+
+            pub_parts = []
+            if r.matched_year:
+                pub_parts.append(str(r.matched_year))
+            if r.matched_publisher:
+                pub_parts.append(r.matched_publisher)
+            if r.matched_isbn:
+                pub_parts.append(f"ISBN {r.matched_isbn}")
+
+            click.echo(f"        Matched:  {matched}")
+            click.echo(f"        Score:    {conf}")
+            if pub_parts:
+                click.echo(f"        Info:     {' · '.join(pub_parts)}")
+            if r.matched_cover_url:
+                link = _hyperlink(r.matched_cover_url, "View cover ↗")
+                click.echo(f"        Cover:    {link}")
+
         click.echo(f"        Path:     \"{r.current_path}\"")
         click.echo()
 
@@ -429,8 +443,8 @@ def review_accept(
 
     store = StateStore(config.paths.state_db)
 
-    # Build a list of (path, record_or_None) pairs so we can use cached
-    # metadata from the record and avoid a redundant API call.
+    # Build a list of (path, record_or_None, queue_position) triples so we can
+    # use cached metadata and show accurate rematch IDs in error messages.
     if review_id is not None or accept_all:
         all_records = store.list_by_state(FileState.REVIEW)
         store.close()
@@ -443,22 +457,40 @@ def review_accept(
                     f"ID {review_id} out of range — queue has {len(all_records)} item(s).\n"
                     "  Run 'libris list-review' to see current IDs."
                 )
-            target_pairs = [(Path(all_records[review_id - 1].current_path), all_records[review_id - 1])]
+            target_triples = [(Path(all_records[review_id - 1].current_path), all_records[review_id - 1], review_id)]
         else:
-            target_pairs = [(Path(r.current_path), r) for r in all_records]
+            target_triples = [(Path(r.current_path), r, i) for i, r in enumerate(all_records, 1)]
     else:
-        # Path-based: look up the record by current_path so we can use its cache
+        # Path-based: look up the record and its queue position
         resolved = file_path.resolve()
         cached = store.get_by_current_path(str(resolved))
+        all_review = store.list_by_state(FileState.REVIEW)
         store.close()
-        target_pairs = [(resolved, cached)]
+        queue_pos = next(
+            (i for i, r in enumerate(all_review, 1) if r.current_path == str(resolved)),
+            None,
+        )
+        target_triples = [(resolved, cached, queue_pos)]
 
     any_failed = False
 
     click.echo()
-    for target, cached_record in target_pairs:
+    for target, cached_record, queue_pos in target_triples:
         if not target.exists():
             click.echo(f"  ⚠   Skipping (file not found): {target}", err=True)
+            any_failed = True
+            continue
+
+        # Block acceptance if no metadata match has been found yet
+        if cached_record and not _has_match(cached_record):
+            id_hint = f"--id {queue_pos}" if queue_pos else "--id <N>  (run 'libris list-review' to find ID)"
+            click.echo(f"  ⚠   {target.name}")
+            click.echo(click.style(
+                f"       No metadata match yet — find one first:\n"
+                f"       libris rematch {id_hint}",
+                fg="yellow",
+            ))
+            click.echo()
             any_failed = True
             continue
 
