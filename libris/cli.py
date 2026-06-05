@@ -408,6 +408,32 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
 
     while True:
         click.echo(_hr())
+
+        # ── API status panel ─────────────────────────────────────────
+        google_on = current_source in ("all", "google")
+        ol_on = current_source in ("all", "openlibrary")
+        g_label = click.style("✅ Google Books", bold=google_on) if google_on \
+            else click.style("○  Google Books", dim=True)
+        ol_label = click.style("✅ OpenLibrary", bold=ol_on) if ol_on \
+            else click.style("○  OpenLibrary", dim=True)
+        click.echo(f"  APIs       {g_label}     {ol_label}")
+        click.echo(click.style(
+            "             Change at the Source prompt · options: all, google, openlibrary",
+            dim=True,
+        ))
+        click.echo()
+
+        # ── Query tips ───────────────────────────────────────────────
+        click.echo(click.style("  Tips", bold=True))
+        click.echo(click.style("    · Use the book title for best results", dim=True))
+        click.echo(click.style("        \"Caliban and the Witch\"", dim=True))
+        click.echo(click.style("    · Add author surname to narrow results", dim=True))
+        click.echo(click.style("        \"Caliban Federici\"", dim=True))
+        click.echo(click.style("    · Use ISBN if known", dim=True))
+        click.echo(click.style("        \"9780441013593\"", dim=True))
+        click.echo()
+
+        click.echo(_hr())
         query_str = click.prompt("  Query", default=current_query)
         source_str = click.prompt(
             "  Source",
