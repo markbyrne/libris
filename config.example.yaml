@@ -1,0 +1,61 @@
+# libris configuration
+# Copy to config.local.yaml and adjust paths before running.
+# All paths support ~ expansion.
+# Environment variable overrides: LIBRIS_<SECTION>_<KEY> (e.g. LIBRIS_CALIBRE_MODE=docker)
+
+watcher:
+  # Directory to watch for new books/audiobooks
+  incoming_dir: ~/books/incoming
+  # How often fswatch checks for changes (macOS only, seconds)
+  poll_interval_seconds: 2
+
+paths:
+  # Intermediate staging area for converted files
+  staging_dir: ~/books/staging
+  # Quarantine for low-confidence metadata matches — review before importing
+  review_dir: ~/books/review
+  # Files that failed processing (errors)
+  failed_dir: ~/books/failed
+  # SQLite state database
+  state_db: ~/books/libris.db
+
+calibre:
+  # "local" = use system calibredb directly
+  # "docker" = run calibredb inside a Docker container (e.g. calibre-web on Plexi)
+  mode: local
+
+  # --- local mode ---
+  library_path: ~/Calibre Library
+
+  # --- docker mode (uncomment and fill in for Plexi) ---
+  # docker_container: calibre-web
+  # path_map:
+  #   # Maps host paths to container-internal paths
+  #   # Longest prefix wins
+  #   /media/pidrive/Books: /books
+  #   /media/pidrive/completed/books: /add
+
+metadata:
+  # Confidence threshold: 0.0–1.0
+  # Files matched above this score are auto-imported.
+  # Files below are moved to review/ and you are notified.
+  confidence_threshold: 0.75
+
+  # Optional Google Books API key (unauthenticated = ~60 req/min)
+  google_books_api_key: null
+
+  # mock_mode: true disables all HTTP calls and returns empty results.
+  # Useful for testing the pipeline without hitting real APIs.
+  mock_mode: false
+
+ntfy:
+  # ntfy.sh topic name (required for notifications)
+  topic: my-libris
+  # ntfy server URL (default: public ntfy.sh)
+  base_url: https://ntfy.sh
+  # Set to false to disable all notifications
+  enabled: true
+  # Optional Bearer token for private ntfy channels
+  # auth_token: your_token_here
+
+log_level: INFO   # DEBUG | INFO | WARNING | ERROR
