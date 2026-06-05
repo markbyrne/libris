@@ -427,11 +427,11 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             else click.style("○  OpenLibrary", dim=True)
         click.echo(f"  APIs       {g_label}     {ol_label}")
         click.echo(click.style(
-            "             Change at the Source prompt  ·  libris rematch --id <id> --source <option>",
+            "             libris rematch --id <id> --source <option>  ·  options: all, google, openlibrary",
             dim=True,
         ))
         click.echo(click.style(
-            "             or in query prompt  ·  /api <option>  ·  options: all, google, openlibrary",
+            "             or type  /api <option>  in the query prompt",
             dim=True,
         ))
         click.echo()
@@ -469,11 +469,6 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                 click.prompt("  Press Enter to continue", default="", show_default=False)
             continue  # Re-render the panel with updated source (no search)
 
-        source_str = click.prompt(
-            "  Source",
-            default=current_source,
-            type=click.Choice(list(_API_CHOICES), case_sensitive=False),
-        )
         click.echo()
         click.echo("  Searching…")
 
@@ -486,13 +481,13 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
         with httpx.Client(timeout=12.0) as client:
             google_results: list = []
             ol_results: list = []
-            if source_str in ("all", "google"):
+            if current_source in ("all", "google"):
                 google_results = google_books.fetch(
                     search_query,
                     api_key=config.metadata.google_books_api_key,
                     client=client,
                 )
-            if source_str in ("all", "openlibrary"):
+            if current_source in ("all", "openlibrary"):
                 ol_results = open_library.fetch(search_query, client=client)
 
         all_results = sorted(
@@ -501,11 +496,12 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             reverse=True,
         )[:3]
 
+        current_query = query_str  # persist refined query for next iteration
+
         if not all_results:
-            click.echo("  No results found — try a different query.")
             click.echo()
-            current_query = query_str
-            current_source = source_str
+            click.echo("  No results found — try a different query.")
+            click.prompt("\n  Press Enter to refine", default="", show_default=False)
             continue
 
         click.echo()
@@ -580,10 +576,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             return
 
         elif choice == "r":
-            current_query = query_str
-            current_source = source_str
-            click.echo()
-            continue
+            continue  # current_query already updated above; clear+redraw
 
         elif choice == "q":
             click.echo("  Cancelled — file remains in review.")
@@ -591,7 +584,8 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
             return
 
         else:
-            click.echo("  Please enter 1, 2, 3, r, or q.\n")
+            click.echo(click.style("  Please enter 1, 2, 3, r, or q.", fg="yellow"))
+            click.prompt("\n  Press Enter to continue", default="", show_default=False)
 
 
 @main.command("revert-import")
