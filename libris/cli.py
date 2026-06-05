@@ -181,42 +181,66 @@ def _prompt_rate_limit(error: RateLimitError, config_path: Path, config) -> str:
     """Show rate-limit options and return 'wait', 'key_saved', or 'skip'.
 
     For Google Books without an API key, also offers to add one.
+    Daily/quota limits don't offer a wait option — waiting seconds won't help.
     The function blocks during any countdown (wait choice).
     """
     is_google = error.source == "google_books"
     source_label = "Google Books" if is_google else "OpenLibrary"
     has_key = bool(config.metadata.google_books_api_key) if is_google else False
-    wait_secs = error.retry_after or (60 if is_google else 30)
+    is_daily = error.reason in ("dailyLimitExceeded",) or (has_key and is_google)
+    wait_secs = error.retry_after  # None if not provided by the API
 
     click.echo()
     click.echo(click.style(f"  ⚠   {source_label} rate limit hit", fg="yellow"))
 
     if is_google and not has_key:
+        if is_daily or error.reason == "dailyLimitExceeded":
+            click.echo(click.style(
+                "      Daily unauthenticated quota exceeded — resets at midnight Pacific Time.",
+                dim=True,
+            ))
+        else:
+            click.echo(click.style(
+                "      Unauthenticated requests are heavily throttled by Google.",
+                dim=True,
+            ))
         click.echo(click.style(
-            "      Unauthenticated: ~60 req/min. An API key grants 1,000 req/day.",
+            "      A free API key grants 1,000 requests/day with reliable access.",
             dim=True,
         ))
     elif is_google and has_key:
         click.echo(click.style(
-            "      Daily API key quota (1,000 req/day) exhausted.",
+            "      Daily API key quota (1,000 req/day) exhausted — resets at midnight Pacific Time.",
             dim=True,
         ))
 
     click.echo()
-    click.echo(f"  [w]  Wait {wait_secs}s and retry")
+
+    # Only offer wait if we have an actual Retry-After time (short-term throttle).
+    # Daily quota resets don't benefit from a short wait.
+    can_wait = wait_secs is not None and not is_daily
+    if can_wait:
+        click.echo(f"  [w]  Wait {wait_secs}s and retry")
     if is_google and not has_key:
-        click.echo( "  [k]  Add a Google Books API key (free, 1,000 req/day)")
+        click.echo( "  [k]  Add a Google Books API key (free, 1,000 req/day)  ← recommended")
     click.echo(f"  [s]  Skip {source_label} for this search")
     click.echo()
 
-    valid = ("w", "k", "s") if (is_google and not has_key) else ("w", "s")
-    while True:
-        choice = click.prompt("  Choice", default="w").strip().lower()
-        if choice in valid:
-            break
-        click.echo(click.style(f"  Please enter one of: {', '.join(valid)}", fg="yellow"))
+    valid_opts = []
+    if can_wait:
+        valid_opts.append("w")
+    if is_google and not has_key:
+        valid_opts.append("k")
+    valid_opts.append("s")
 
-    if choice == "w":
+    default = "k" if (is_google and not has_key) else "s"
+    while True:
+        choice = click.prompt("  Choice", default=default).strip().lower()
+        if choice in valid_opts:
+            break
+        click.echo(click.style(f"  Please enter one of: {', '.join(valid_opts)}", fg="yellow"))
+
+    if choice == "w" and can_wait:
         click.echo()
         try:
             for remaining in range(wait_secs, 0, -1):

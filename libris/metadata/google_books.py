@@ -48,10 +48,12 @@ def fetch(
     try:
         _client = client or httpx.Client(timeout=_TIMEOUT)
         response = _client.get(_BASE_URL, params=params)
-        if response.status_code == 429:
+        rl_reason = _rate_limit_reason(response)
+        if rl_reason is not None:
             raise RateLimitError(
                 source="google_books",
                 retry_after=_parse_retry_after(response),
+                reason=rl_reason,
             )
         response.raise_for_status()
         data = response.json()
@@ -63,6 +65,39 @@ def fetch(
 
     candidates = _parse_response(data)
     return [score_candidate(query, c) for c in candidates]
+
+
+def _rate_limit_reason(response: httpx.Response) -> Optional[str]:
+    """Return the rate-limit reason string if the response indicates throttling, else None.
+
+    Google Books uses both HTTP 429 and HTTP 403 for quota errors.  The reason
+    is in the JSON body under error.errors[].reason.
+    """
+    if response.status_code == 429:
+        # Try to extract reason from body; fall back to generic string
+        try:
+            errors = response.json().get("error", {}).get("errors", [])
+            for e in errors:
+                if e.get("reason"):
+                    return e["reason"]
+        except Exception:
+            pass
+        return "rateLimitExceeded"
+
+    if response.status_code == 403:
+        try:
+            errors = response.json().get("error", {}).get("errors", [])
+            for e in errors:
+                if e.get("reason") in (
+                    "rateLimitExceeded",
+                    "userRateLimitExceeded",
+                    "dailyLimitExceeded",
+                ):
+                    return e["reason"]
+        except Exception:
+            pass
+
+    return None
 
 
 def _parse_retry_after(response: httpx.Response) -> Optional[int]:

@@ -49,10 +49,18 @@ class RateLimitError(BookPipelineError):
     than silently returning no results.
     """
 
-    def __init__(self, source: str, retry_after: Optional[int] = None) -> None:
-        self.source = source          # "google_books" | "open_library"
+    def __init__(
+        self,
+        source: str,
+        retry_after: Optional[int] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        self.source = source            # "google_books" | "open_library"
         self.retry_after = retry_after  # seconds from Retry-After header, or None
+        self.reason = reason            # e.g. "rateLimitExceeded", "dailyLimitExceeded"
         msg = f"{source} rate limited"
+        if reason:
+            msg += f" ({reason})"
         if retry_after:
             msg += f" (retry after {retry_after}s)"
         super().__init__(msg)
