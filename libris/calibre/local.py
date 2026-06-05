@@ -14,6 +14,8 @@ from .base import CalibreBackend
 
 log = logging.getLogger(__name__)
 
+_BOOK_EXTENSIONS = {".epub", ".m4b", ".mp3", ".mobi", ".azw3", ".pdf", ".cbz", ".cbr", ".djvu"}
+
 
 class LocalCalibre(CalibreBackend):
     """Calls calibredb and ebook-convert as local subprocesses."""
@@ -43,6 +45,7 @@ class LocalCalibre(CalibreBackend):
                 f"calibredb add failed (rc={result.returncode}): {result.stderr.strip()}"
             )
 
+        log.debug("calibre.local.add_stdout", extra={"stdout": result.stdout.strip()})
         book_id = _parse_book_id(result.stdout)
         log.info("calibre.local.added", extra={"file": str(file_path), "book_id": book_id})
         return book_id
@@ -74,6 +77,41 @@ class LocalCalibre(CalibreBackend):
         else:
             log.info("calibre.local.cover_set", extra={"book_id": book_id})
 
+    def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "calibredb", "export",
+            "--to-dir", str(dest_dir),
+            "--dont-save-cover",
+            "--dont-write-opf",
+            "--template", "{title}",
+            str(book_id),
+            "--with-library", str(self._library),
+        ]
+        log.debug("calibre.local.export", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"calibredb export failed (rc={result.returncode}): {result.stderr.strip()}"
+            )
+        exported = [f for f in dest_dir.rglob("*") if f.suffix.lower() in _BOOK_EXTENSIONS]
+        log.info("calibre.local.exported", extra={"book_id": book_id, "files": [str(f) for f in exported]})
+        return exported
+
+    def remove_book(self, book_id: int) -> None:
+        cmd = [
+            "calibredb", "remove",
+            str(book_id),
+            "--with-library", str(self._library),
+        ]
+        log.debug("calibre.local.remove", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"calibredb remove failed (rc={result.returncode}): {result.stderr.strip()}"
+            )
+        log.info("calibre.local.removed", extra={"book_id": book_id})
+
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         cmd = ["ebook-convert", str(input_path), str(output_path)]
         log.debug("calibre.local.convert", extra={"cmd": cmd})
@@ -88,8 +126,20 @@ class LocalCalibre(CalibreBackend):
 
 
 def _metadata_flags(result: MetadataResult) -> list[list[str]]:
-    """Build --field flags for calibredb set_metadata."""
+    """Build --field flags for calibredb set_metadata.
+
+    Sets title and authors explicitly so that calibredb's initial add (which
+    reads embedded EPUB/M4B tags, which may be wrong or missing) is corrected
+    with the API-resolved values.
+    """
     flags = []
+    # Always overwrite title and authors — the file's embedded tags are often wrong
+    if result.title:
+        flags.append(["--field", f"title:{result.title}"])
+    if result.best and result.best.candidate.authors:
+        # Calibre uses " & " to separate multiple authors
+        authors_str = " & ".join(result.best.candidate.authors)
+        flags.append(["--field", f"authors:{authors_str}"])
     if result.publisher:
         flags.append(["--field", f"publisher:{result.publisher}"])
     if result.description:
@@ -108,13 +158,26 @@ def _metadata_flags(result: MetadataResult) -> list[list[str]]:
 def _parse_book_id(stdout: str) -> int:
     """Extract the book ID from calibredb add output.
 
-    calibredb prints: "Added book ids: 42" or "Empty search result"
+    calibredb output varies across versions:
+      - "Added book ids: 42"
+      - "Added book ids:42"
+      - "book id: 42"
+      - Plain integer on its own line
+
+    Falls back to extracting the last bare integer from the output, which
+    is almost always the book ID.  Returns -1 only if stdout is empty.
     """
+    # Canonical: "Added book ids: 42" or "Added book ids:42"
     m = re.search(r"Added book ids?:\s*(\d+)", stdout, re.IGNORECASE)
     if m:
         return int(m.group(1))
-    # Some versions print "book id: 42"
-    m = re.search(r"book id:\s*(\d+)", stdout, re.IGNORECASE)
+    # Some versions: "book id: 42"
+    m = re.search(r"\bbook\s+id:\s*(\d+)", stdout, re.IGNORECASE)
     if m:
         return int(m.group(1))
-    return -1   # unknown ID; import still succeeded
+    # Last resort: grab every integer and return the last one.
+    # calibredb always prints the assigned ID somewhere in stdout.
+    numbers = re.findall(r"\b(\d+)\b", stdout)
+    if numbers:
+        return int(numbers[-1])
+    return -1   # unknown ID; import still succeeded but metadata won't be set

@@ -54,3 +54,24 @@ class CalibreBackend(ABC):
             ConversionError: If ebook-convert fails.
         """
         ...
+
+    @abstractmethod
+    def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
+        """Export a book's file(s) from the Calibre library to *dest_dir*.
+
+        Returns a list of the exported file paths (may be more than one if
+        the book has multiple formats stored).
+
+        Raises:
+            CalibreImportError: If calibredb export fails.
+        """
+        ...
+
+    @abstractmethod
+    def remove_book(self, book_id: int) -> None:
+        """Permanently remove a book and its files from the Calibre library.
+
+        Raises:
+            CalibreImportError: If calibredb remove fails.
+        """
+        ...

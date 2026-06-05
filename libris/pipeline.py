@@ -198,6 +198,7 @@ class Pipeline:
 
         # ── Import ────────────────────────────────────────────────────
         book_id = self._calibre.add_book(m4b_path)
+        record.calibre_book_id = book_id
         log.info("pipeline.audio.imported", extra={"book_id": book_id, "title": result.title})
 
         # ── Full metadata + cover in Calibre ──────────────────────────
@@ -237,6 +238,7 @@ class Pipeline:
             return self._mark_review(record, result, epub_path)
 
         book_id = self._calibre.add_book(epub_path)
+        record.calibre_book_id = book_id
         log.info("pipeline.ebook.imported", extra={"book_id": book_id, "file": str(epub_path)})
 
         # ── Full metadata + cover in Calibre ──────────────────────────

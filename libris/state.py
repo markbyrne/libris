@@ -48,6 +48,7 @@ class FileRecord:
     matched_title: Optional[str] = None
     matched_author: Optional[str] = None
     error_msg: Optional[str] = None
+    calibre_book_id: Optional[int] = None   # Calibre library book ID after import
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -68,35 +69,38 @@ class FileRecord:
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS files (
-    id             TEXT PRIMARY KEY,
-    original_path  TEXT NOT NULL,
-    current_path   TEXT NOT NULL,
-    media_type     TEXT NOT NULL,
-    state          TEXT NOT NULL,
-    confidence     REAL,
-    matched_title  TEXT,
-    matched_author TEXT,
-    error_msg      TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
+    id               TEXT PRIMARY KEY,
+    original_path    TEXT NOT NULL,
+    current_path     TEXT NOT NULL,
+    media_type       TEXT NOT NULL,
+    state            TEXT NOT NULL,
+    confidence       REAL,
+    matched_title    TEXT,
+    matched_author   TEXT,
+    error_msg        TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    calibre_book_id  INTEGER
 );
 """
 
 _UPSERT = """
 INSERT INTO files
     (id, original_path, current_path, media_type, state,
-     confidence, matched_title, matched_author, error_msg, created_at, updated_at)
+     confidence, matched_title, matched_author, error_msg, calibre_book_id,
+     created_at, updated_at)
 VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
-    current_path   = excluded.current_path,
-    media_type     = excluded.media_type,
-    state          = excluded.state,
-    confidence     = excluded.confidence,
-    matched_title  = excluded.matched_title,
-    matched_author = excluded.matched_author,
-    error_msg      = excluded.error_msg,
-    updated_at     = excluded.updated_at;
+    current_path     = excluded.current_path,
+    media_type       = excluded.media_type,
+    state            = excluded.state,
+    confidence       = excluded.confidence,
+    matched_title    = excluded.matched_title,
+    matched_author   = excluded.matched_author,
+    error_msg        = excluded.error_msg,
+    calibre_book_id  = excluded.calibre_book_id,
+    updated_at       = excluded.updated_at;
 """
 
 
@@ -110,8 +114,18 @@ class StateStore:
             check_same_thread=False,
             isolation_level=None,   # autocommit
         )
+        # Use Row factory so _row_to_record accesses columns by name, not position.
+        # This makes the schema resilient to future column additions.
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute(_CREATE_TABLE)
+        # Migrate: add calibre_book_id column if this is an older DB.
+        # ALTER TABLE always appends to the end — named access in _row_to_record
+        # means column order doesn't matter.
+        try:
+            self._conn.execute("ALTER TABLE files ADD COLUMN calibre_book_id INTEGER;")
+        except Exception:
+            pass  # Column already exists — safe to ignore
 
     # ------------------------------------------------------------------
     # Write
@@ -130,6 +144,7 @@ class StateStore:
             record.matched_title,
             record.matched_author,
             record.error_msg,
+            record.calibre_book_id,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
         ))
@@ -142,6 +157,14 @@ class StateStore:
         """Fetch a record by ID. Returns None if not found."""
         row = self._conn.execute(
             "SELECT * FROM files WHERE id = ?", (record_id,)
+        ).fetchone()
+        return _row_to_record(row) if row else None
+
+    def get_by_calibre_id(self, calibre_book_id: int) -> Optional[FileRecord]:
+        """Fetch the most recent record for a given Calibre book ID."""
+        row = self._conn.execute(
+            "SELECT * FROM files WHERE calibre_book_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (calibre_book_id,),
         ).fetchone()
         return _row_to_record(row) if row else None
 
@@ -161,6 +184,27 @@ class StateStore:
         ).fetchall()
         return [_row_to_record(r) for r in rows]
 
+    def reset_processing(self) -> int:
+        """Reset all PROCESSING records back to INCOMING (recover from crash).
+
+        Returns the number of records reset.
+        """
+        result = self._conn.execute(
+            "UPDATE files SET state='incoming', updated_at=? WHERE state='processing'",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        return result.rowcount
+
+    def cleanup_stale_review(self, current_path: str, exclude_id: str = "") -> None:
+        """After a force-accept import, mark any old REVIEW record at *current_path*
+        as IMPORTED so it no longer appears in list-review output.
+        """
+        self._conn.execute(
+            "UPDATE files SET state='imported', updated_at=? "
+            "WHERE current_path=? AND state='review' AND id != ?",
+            (datetime.now(timezone.utc).isoformat(), current_path, exclude_id),
+        )
+
     def close(self) -> None:
         self._conn.close()
 
@@ -169,18 +213,23 @@ class StateStore:
 # Row → dataclass helper
 # ---------------------------------------------------------------------------
 
-def _row_to_record(row: tuple) -> FileRecord:
-    (id_, orig, curr, mtype, state, conf, title, author, err, created, updated) = row
+def _row_to_record(row: sqlite3.Row) -> FileRecord:
+    """Convert a sqlite3.Row to a FileRecord using named column access.
+
+    Named access (row["column"]) is resilient to column order, so adding new
+    columns via ALTER TABLE never breaks this function.
+    """
     return FileRecord(
-        id=id_,
-        original_path=orig,
-        current_path=curr,
-        media_type=mtype,
-        state=FileState(state),
-        confidence=conf,
-        matched_title=title,
-        matched_author=author,
-        error_msg=err,
-        created_at=datetime.fromisoformat(created),
-        updated_at=datetime.fromisoformat(updated),
+        id=row["id"],
+        original_path=row["original_path"],
+        current_path=row["current_path"],
+        media_type=row["media_type"],
+        state=FileState(row["state"]),
+        confidence=row["confidence"],
+        matched_title=row["matched_title"],
+        matched_author=row["matched_author"],
+        error_msg=row["error_msg"],
+        calibre_book_id=row["calibre_book_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
     )

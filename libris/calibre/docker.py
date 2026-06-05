@@ -22,7 +22,7 @@ from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
 from .base import CalibreBackend
-from .local import _metadata_flags, _parse_book_id
+from .local import _BOOK_EXTENSIONS, _metadata_flags, _parse_book_id
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +89,49 @@ class DockerCalibre(CalibreBackend):
             log.warning("calibre.docker.set_cover_failed", extra={"stderr": result.stderr})
         else:
             log.info("calibre.docker.cover_set", extra={"book_id": book_id})
+
+    def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        container_tmp = "/tmp/libris_export"
+        # Export inside the container
+        export_cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "export",
+            "--to-dir", container_tmp,
+            "--dont-save-cover", "--dont-write-opf",
+            "--template", "{title}",
+            str(book_id),
+        ]
+        log.debug("calibre.docker.export", extra={"cmd": export_cmd})
+        result = subprocess.run(export_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"docker calibredb export failed (rc={result.returncode}): {result.stderr.strip()}"
+            )
+        # Copy files from container to host dest_dir
+        cp_cmd = ["docker", "cp", f"{self._container}:{container_tmp}/.", str(dest_dir)]
+        subprocess.run(cp_cmd, capture_output=True, text=True, check=True)
+        # Clean up container temp dir
+        subprocess.run(
+            ["docker", "exec", self._container, "rm", "-rf", container_tmp],
+            capture_output=True,
+        )
+        exported = [f for f in dest_dir.rglob("*") if f.suffix.lower() in _BOOK_EXTENSIONS]
+        log.info("calibre.docker.exported", extra={"book_id": book_id, "files": [str(f) for f in exported]})
+        return exported
+
+    def remove_book(self, book_id: int) -> None:
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "remove", str(book_id),
+        ]
+        log.debug("calibre.docker.remove", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"docker calibredb remove failed (rc={result.returncode}): {result.stderr.strip()}"
+            )
+        log.info("calibre.docker.removed", extra={"book_id": book_id})
 
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         container_input = self._translate(input_path)
