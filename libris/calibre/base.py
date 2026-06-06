@@ -75,3 +75,16 @@ class CalibreBackend(ABC):
             CalibreImportError: If calibredb remove fails.
         """
         ...
+
+    @abstractmethod
+    def search(self, query: str) -> list[int]:
+        """Search the Calibre library and return matching book IDs.
+
+        Uses calibredb's search syntax:
+          title:"=Exact Title"   — exact title match (case-insensitive)
+          authors:"Surname"      — author name contains
+          title:"Foo" and authors:"Bar"  — combined
+
+        Returns an empty list on no match or any error.
+        """
+        ...

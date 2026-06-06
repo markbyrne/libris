@@ -150,6 +150,10 @@ def _render_review_record(i: int, r) -> None:
     """Print a single review-queue entry (shared by list-review and show-cover)."""
     click.echo(f"  [{i}]  {Path(r.current_path).name}")
 
+    # Duplicate warning — shown before the match block
+    if r.error_msg and r.error_msg.startswith("Duplicate:"):
+        click.echo(click.style(f"        ⚠  {r.error_msg}", fg="yellow"))
+
     if not _has_match(r):
         click.echo(click.style("        [!] No match found", fg="yellow"))
     else:
@@ -381,6 +385,7 @@ def check_config(config_path: Optional[Path]) -> None:
     else:
         click.echo(f"  Container:      {config.calibre.docker_container}")
     click.echo(f"  Confidence:     {config.metadata.confidence_threshold}")
+    click.echo(f"  Duplicates:     {config.metadata.duplicate_action}")
     click.echo(f"  Mock mode:      {config.metadata.mock_mode}")
     _scan = config.watcher.scan_interval_hours
     _scan_str = f"every {_scan:g}h" if _scan > 0 else "disabled"

@@ -156,6 +156,22 @@ class DockerCalibre(CalibreBackend):
             )
         log.info("calibre.docker.removed", extra={"book_id": book_id})
 
+    def search(self, query: str) -> list[int]:
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "search", query,
+        ]
+        log.debug("calibre.docker.search", extra={"query": query})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        raw = result.stdout.strip()
+        if not raw:
+            return []
+        try:
+            return [int(x.strip()) for x in raw.split(",") if x.strip().isdigit()]
+        except ValueError:
+            log.warning("calibre.docker.search_parse_failed", extra={"raw": raw})
+            return []
+
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         container_input = self._translate(input_path)
         container_output = self._translate(output_path)

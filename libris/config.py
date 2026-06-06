@@ -49,6 +49,11 @@ class MetadataConfig:
     google_books_api_key: str | None = None   # None = unauthenticated (60 req/min)
     mock_mode: bool = False                    # True = return fixture data, no HTTP
     overwrite_existing: bool = True            # always overwrite embedded metadata
+    # What to do when an incoming file matches a book already in Calibre:
+    #   review — move to review/ with a duplicate warning (default, safest)
+    #   skip   — discard silently; mark IMPORTED so it won't be re-processed
+    #   import — always import regardless (current behaviour before this feature)
+    duplicate_action: str = "review"
 
 
 @dataclass
@@ -160,6 +165,14 @@ def load_config(config_path: Path) -> Config:
 
     # ---- metadata ----
     metadata_raw = raw.get("metadata", {})
+    dup_action = (
+        os.environ.get("LIBRIS_METADATA_DUPLICATE_ACTION")
+        or metadata_raw.get("duplicate_action", "review")
+    )
+    if dup_action not in ("review", "skip", "import"):
+        raise ConfigError(
+            f"metadata.duplicate_action must be 'review', 'skip', or 'import', got: {dup_action!r}"
+        )
     metadata = MetadataConfig(
         confidence_threshold=float(
             os.environ.get("LIBRIS_METADATA_CONFIDENCE_THRESHOLD",
@@ -172,6 +185,7 @@ def load_config(config_path: Path) -> Config:
             "LIBRIS_METADATA_OVERWRITE_EXISTING",
             metadata_raw.get("overwrite_existing", True),
         ),
+        duplicate_action=dup_action,
     )
 
     if not (0.0 <= metadata.confidence_threshold <= 1.0):

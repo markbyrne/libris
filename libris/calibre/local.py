@@ -115,6 +115,23 @@ class LocalCalibre(CalibreBackend):
             )
         log.info("calibre.local.removed", extra={"book_id": book_id})
 
+    def search(self, query: str) -> list[int]:
+        cmd = [
+            "calibredb", "search", query,
+            "--with-library", str(self._library),
+        ]
+        log.debug("calibre.local.search", extra={"query": query})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        # rc=1 with empty stdout = no matches (not an error)
+        raw = result.stdout.strip()
+        if not raw:
+            return []
+        try:
+            return [int(x.strip()) for x in raw.split(",") if x.strip().isdigit()]
+        except ValueError:
+            log.warning("calibre.local.search_parse_failed", extra={"raw": raw})
+            return []
+
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         cmd = ["ebook-convert", str(input_path), str(output_path)]
         log.debug("calibre.local.convert", extra={"cmd": cmd})

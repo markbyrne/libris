@@ -531,6 +531,11 @@ class Pipeline:
             )
             return self._mark_review(record, result, m4b_path)
 
+        # ── Duplicate check ───────────────────────────────────────────
+        dup_record = self._handle_duplicate(record, result, m4b_path)
+        if dup_record is not None:
+            return dup_record
+
         # ── Tag ───────────────────────────────────────────────────────
         audio_tag.embed_metadata(
             m4b_path,
@@ -578,6 +583,11 @@ class Pipeline:
             log.info("pipeline.ebook.low_confidence",
                      extra={"confidence": result.confidence, "title": result.title})
             return self._mark_review(record, result, epub_path)
+
+        # ── Duplicate check ───────────────────────────────────────────
+        dup_record = self._handle_duplicate(record, result, epub_path)
+        if dup_record is not None:
+            return dup_record
 
         book_id = self._calibre.add_book(epub_path)
         record.calibre_book_id = book_id
@@ -662,6 +672,99 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _find_calibre_duplicates(self, title: str, author: str) -> list[int]:
+        """Search Calibre for existing books matching title and author.
+
+        Uses calibredb's exact-title + author-surname search.  Returns a list
+        of matching Calibre book IDs, or [] when no duplicates are found or if
+        the search fails for any reason (errors are swallowed — dedup is best-
+        effort and should never crash the pipeline).
+        """
+        if not title:
+            return []
+        # Escape double-quotes so the query is valid for calibredb
+        safe_title = title.replace('"', '\\"')
+        # "=" prefix = exact match (case-insensitive) in calibredb search
+        parts = [f'title:"={safe_title}"']
+        if author:
+            # Match on the last token of the author name (surname) for flexibility.
+            # e.g. "Christopher Paolini" → searches authors:"Paolini"
+            surname = author.strip().split()[-1].replace('"', '\\"')
+            if surname:
+                parts.append(f'authors:"{surname}"')
+        query = " and ".join(parts)
+        try:
+            return self._calibre.search(query)
+        except Exception as exc:
+            log.warning("pipeline.duplicate_check_failed: %s", exc)
+            return []
+
+    def _handle_duplicate(
+        self,
+        record: FileRecord,
+        result: MetadataResult,
+        file_path: Path,
+    ) -> Optional[FileRecord]:
+        """Check for duplicates and act on them per config.
+
+        Returns a FileRecord if the duplicate was handled (caller should return
+        it immediately); returns None to continue with normal import.
+        """
+        action = self.config.metadata.duplicate_action
+        if action == "import" or self.config.metadata.mock_mode:
+            return None
+
+        dup_ids = self._find_calibre_duplicates(result.title, result.author)
+        if not dup_ids:
+            return None
+
+        id_str = ", ".join(str(i) for i in dup_ids[:3])
+        suffix = f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
+        dup_msg = f"Duplicate: already in Calibre (ID{'s' if len(dup_ids) > 1 else ''}: {id_str}{suffix})"
+
+        log.info(
+            "pipeline.duplicate_detected",
+            extra={
+                "title": result.title,
+                "calibre_ids": dup_ids,
+                "action": action,
+            },
+        )
+
+        if action == "skip":
+            # Discard the file; mark IMPORTED so it won't be re-processed
+            file_path.unlink(missing_ok=True)
+            if result.cover_path:
+                result.cover_path.unlink(missing_ok=True)
+            record.state = FileState.IMPORTED
+            record.matched_title = result.title
+            record.matched_author = result.author
+            record.confidence = result.confidence
+            record.error_msg = dup_msg
+            self._store.upsert(record)
+            log.info("pipeline.duplicate_skipped", extra={"title": result.title})
+            return record
+
+        # action == "review": send to review/ so the user can decide
+        dest = self.config.paths.review_dir / file_path.name
+        _safe_move(file_path, dest)
+        record.current_path = str(dest)
+        record.state = FileState.REVIEW
+        record.matched_title = result.title
+        record.matched_author = result.author
+        record.confidence = result.confidence
+        record.matched_year = int(result.year) if result.year else None
+        record.matched_publisher = result.publisher or None
+        record.matched_isbn = result.isbn
+        record.matched_cover_url = result.best.candidate.cover_url if result.best else None
+        record.matched_metadata_json = _serialize_candidate(result.best) if result.best else None
+        record.error_msg = dup_msg
+        if result.cover_path:
+            result.cover_path.unlink(missing_ok=True)
+        self._store.upsert(record)
+        self._notifier.send_review_alert(record, result)
+        return record
 
     def _scan_incoming(self, reason: str = "periodic") -> None:
         """Process every file/directory currently in incoming_dir.
