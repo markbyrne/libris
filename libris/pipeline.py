@@ -427,20 +427,30 @@ class Pipeline:
         )
         audio_conv.combine_parts(part_files, out_path)
 
-        # Primary record is the first part; mark remaining parts as consumed
+        # Delete ALL original part files now that they're in the combined output.
+        # Do this immediately — before the combined file continues through the
+        # pipeline — so cleanup happens whether the result ends up IMPORTED or
+        # REVIEW.  (If the file goes to review, _mark_review never sees the
+        # part paths, so delaying cleanup until _mark_imported would leave
+        # part 1 orphaned in staging/pending/ forever.)
+        for part_file in part_files:
+            part_file.unlink(missing_ok=True)
+
+        # Mark non-primary part records as consumed
         primary = parts[0]
         for r in parts[1:]:
             r.state = FileState.IMPORTED
             r.error_msg = f"Combined into {out_path.name}"
             self._store.upsert(r)
-            # Remove the individual part file — it's now in the combined M4B
-            Path(r.current_path).unlink(missing_ok=True)
 
         # Clear part fields on the primary record before continuing
         primary.part_num = None
         primary.total_parts = None
         primary.current_path = str(out_path)
 
+        # original_path=part_files[0] tells _mark_imported to clean up the
+        # source path if it still exists; unlink(missing_ok=True) above means
+        # this is a safe no-op when already deleted.
         return self._resolve_tag_and_import_audio(out_path, primary, original_path=part_files[0])
 
     def _check_pending_timeouts(self) -> None:
