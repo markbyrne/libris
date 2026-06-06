@@ -416,7 +416,7 @@ libris review-accept "/books/review/Caliban and the Witch.epub"
 
 #### Format merging
 
-If a file arrives that matches a book already in Calibre **but in a different format**, it is automatically added as a new format to the existing record — no review, no duplicate warning. A single Calibre book record will then hold both files.
+If a file arrives that matches a book already in Calibre **but in a different format**, it is automatically added as a new format to the existing record — no review, no duplicate warning. A single Calibre book record will then hold both files. The existing record's cover and metadata are also refreshed with the freshly resolved API data.
 
 ```
 incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
@@ -424,7 +424,7 @@ incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
                         →  Calibre book 42 now has: EPUB + M4B
 ```
 
-This applies whether the files arrive in the same directory drop or at different times.
+This applies whether the files arrive in the same directory drop or at different times, and regardless of `duplicate_action` — format merging always runs.
 
 #### Accepting duplicates
 
@@ -436,11 +436,13 @@ If the same format already exists in Calibre (e.g. a second EPUB), `review-accep
        libris review-accept --id 1 --overwrite
 ```
 
-Use `--overwrite` when you intentionally want to replace or supplement an existing entry:
+Use `--overwrite` to replace the existing format in the Calibre record rather than creating a duplicate entry. The cover and metadata are updated at the same time:
 
 ```bash
 libris review-accept --id 1 --overwrite
 ```
+
+With `duplicate_action: import` in your config, the same smart merge happens automatically — same format is replaced in-place, different format is added to the existing record. No second Calibre entry is ever created.
 
 To delete the duplicate instead, use `review-discard`:
 

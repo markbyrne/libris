@@ -194,11 +194,14 @@ class Pipeline:
         self._store.upsert(record)
 
         try:
-            # ── Format-merge check ────────────────────────────────────────
-            # force_import (called from review-accept) bypasses _handle_duplicate.
-            # Still do a format-merge pass so that accepting an EPUB doesn't
-            # create a duplicate record when the book already exists in Calibre
-            # as a different format (e.g. M4B already there → add EPUB to it).
+            # ── Duplicate / format-merge check ────────────────────────────
+            # force_import bypasses _handle_duplicate, but we still need to
+            # detect existing Calibre entries so we don't create a second one.
+            #
+            # Different format:  always add_format to the existing record.
+            # Same format + --overwrite (duplicate_action=="import"):  replace.
+            # Same format + no --overwrite:  block — the CLI should have caught
+            #   this via the is_duplicate flag, but raise here as a safety net.
             if not self.config.metadata.mock_mode:
                 dup_ids = self._find_calibre_duplicates(result.title, result.author)
                 if dup_ids:
@@ -207,10 +210,15 @@ class Pipeline:
                         existing_formats = self._calibre.get_formats(dup_ids[0])
                     except Exception:
                         existing_formats = set()
+
                     if incoming_fmt not in existing_formats:
+                        # Different format: merge into existing record + update metadata
                         try:
                             self._calibre.add_format(dup_ids[0], path)
                             path.unlink(missing_ok=True)
+                            if self.config.output.embed_cover_art and result.cover_path:
+                                self._calibre.set_cover(dup_ids[0], result.cover_path)
+                            self._calibre.set_metadata(dup_ids[0], result)
                             if result.cover_path:
                                 result.cover_path.unlink(missing_ok=True)
                             record.state = FileState.IMPORTED
@@ -235,19 +243,54 @@ class Pipeline:
                             )
                             # fall through — add_book will create a new record
 
+                    elif self.config.metadata.duplicate_action == "import":
+                        # Same format + --overwrite: replace existing format
+                        try:
+                            if media_type == MediaType.AUDIOBOOK:
+                                audio_tag.embed_metadata(path, result, overwrite=True)
+                            self._calibre.add_format(dup_ids[0], path)
+                            path.unlink(missing_ok=True)
+                            if self.config.output.embed_cover_art and result.cover_path:
+                                self._calibre.set_cover(dup_ids[0], result.cover_path)
+                            self._calibre.set_metadata(dup_ids[0], result)
+                            if result.cover_path:
+                                result.cover_path.unlink(missing_ok=True)
+                            record.state = FileState.IMPORTED
+                            record.calibre_book_id = dup_ids[0]
+                            record.error_msg = (
+                                f"Replaced {incoming_fmt.upper()} format in "
+                                f"Calibre book {dup_ids[0]}"
+                            )
+                            self._store.upsert(record)
+                            log.info(
+                                "pipeline.force_import_format_replaced",
+                                extra={
+                                    "book_id": dup_ids[0],
+                                    "format": incoming_fmt,
+                                    "title": result.title,
+                                },
+                            )
+                            return record
+                        except Exception as exc:
+                            log.warning(
+                                "pipeline.force_import_replace_failed: %s", exc
+                            )
+                            # fall through — add_book creates a new entry as last resort
+
+                    else:
+                        # Same format, no --overwrite: block to prevent a duplicate
+                        raise BookPipelineError(
+                            f"'{result.title}' is already in Calibre as "
+                            f"{incoming_fmt.upper()} (book {dup_ids[0]}). "
+                            "Re-run review-accept with --overwrite to replace it."
+                        )
+
             # Embed audio tags before adding to Calibre (cover set via set_cover instead)
             if media_type == MediaType.AUDIOBOOK:
                 audio_tag.embed_metadata(path, result, overwrite=True)
 
             book_id = self._calibre.add_book(path)
             record.calibre_book_id = book_id
-            # set_cover MUST run before set_metadata.  The OPF file passed to
-            # "calibredb set_metadata BOOK_ID cover.opf" replaces *all* book
-            # metadata with the OPF's contents.  Our cover OPF has no dc:title
-            # or dc:creator, so running cover after metadata would silently
-            # reset title/authors to "Unknown".  With cover first, set_metadata
-            # (which uses --field flags) then writes title/authors without
-            # touching the cover field.
             if self.config.output.embed_cover_art and result.cover_path:
                 self._calibre.set_cover(book_id, result.cover_path)
             self._calibre.set_metadata(book_id, result)
@@ -723,9 +766,6 @@ class Pipeline:
         log.info("pipeline.audio.imported", extra={"book_id": book_id, "title": result.title})
 
         # ── Full metadata + cover in Calibre ──────────────────────────
-        # Cover before metadata: the OPF file used by set_cover replaces all
-        # book metadata, which would clobber title/authors.  set_metadata
-        # (--field flags) runs last and writes title/authors without clearing cover.
         if self.config.output.embed_cover_art and result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
         self._calibre.set_metadata(book_id, result)
@@ -829,9 +869,6 @@ class Pipeline:
         )
 
         # ── Full metadata + cover in Calibre ──────────────────────────
-        # Cover before metadata: the OPF file used by set_cover replaces all
-        # book metadata, which would clobber title/authors.  set_metadata
-        # (--field flags) runs last and writes title/authors without clearing cover.
         if self.config.output.embed_cover_art and result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
         self._calibre.set_metadata(book_id, result)
@@ -955,13 +992,19 @@ class Pipeline:
         of duplicate_action — so an EPUB and M4B of the same book end up
         in one Calibre entry.
 
+        When the same format already exists:
+          import  → replace the existing format + update metadata (never creates
+                    a second Calibre entry)
+          skip    → discard the file silently
+          review  → move to review/ so the user can decide
+
         Returns a FileRecord if the duplicate was handled (caller should return
         it immediately); returns None to continue with normal import.
         """
-        action = self.config.metadata.duplicate_action
-        if action == "import" or self.config.metadata.mock_mode:
+        if self.config.metadata.mock_mode:
             return None
 
+        action = self.config.metadata.duplicate_action
         dup_ids = self._find_calibre_duplicates(result.title, result.author)
         if not dup_ids:
             return None
@@ -977,9 +1020,15 @@ class Pipeline:
             existing_formats = set()
 
         if incoming_fmt not in existing_formats:
+            # Different format: merge into the existing record regardless of
+            # duplicate_action.  Also refresh cover + metadata on the existing
+            # record so it benefits from the freshly resolved API data.
             try:
                 self._calibre.add_format(dup_ids[0], file_path)
                 file_path.unlink(missing_ok=True)
+                if self.config.output.embed_cover_art and result.cover_path:
+                    self._calibre.set_cover(dup_ids[0], result.cover_path)
+                self._calibre.set_metadata(dup_ids[0], result)
                 if result.cover_path:
                     result.cover_path.unlink(missing_ok=True)
                 record.state = FileState.IMPORTED
@@ -1015,6 +1064,33 @@ class Pipeline:
                 "action": action,
             },
         )
+
+        if action == "import":
+            # Replace the existing format and refresh metadata.  "import" means
+            # never skip/review — always merge into the existing record.
+            try:
+                self._calibre.add_format(dup_ids[0], file_path)
+                file_path.unlink(missing_ok=True)
+                if self.config.output.embed_cover_art and result.cover_path:
+                    self._calibre.set_cover(dup_ids[0], result.cover_path)
+                self._calibre.set_metadata(dup_ids[0], result)
+                if result.cover_path:
+                    result.cover_path.unlink(missing_ok=True)
+                record.state = FileState.IMPORTED
+                record.calibre_book_id = dup_ids[0]
+                record.matched_title = result.title
+                record.matched_author = result.author
+                record.confidence = result.confidence
+                record.error_msg = f"Replaced {incoming_fmt.upper()} format in Calibre book {dup_ids[0]}"
+                self._store.upsert(record)
+                log.info(
+                    "pipeline.format_replaced",
+                    extra={"title": result.title, "book_id": dup_ids[0]},
+                )
+                return record
+            except Exception as exc:
+                log.warning("pipeline.replace_format_failed: %s", exc)
+                # Fall through — add_book will create a new entry as last resort
 
         if action == "skip":
             # Discard the file; mark IMPORTED so it won't be re-processed
