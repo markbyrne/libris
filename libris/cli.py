@@ -868,13 +868,14 @@ def review_accept(
             click.echo()
             click.echo("       [o]  Overwrite — replace the existing Calibre entry")
             click.echo("       [d]  Discard   — delete this file from the review queue")
-            click.echo("       [r]  Keep      — leave in review (use --overwrite later)")
+            click.echo("       [s]  Skip      — leave in review (use --overwrite later)")
+            click.echo("       [r]  Rematch   — find a different book match")
             click.echo()
             while True:
-                dup_choice = click.prompt("       Choice", default="r").strip().lower()
-                if dup_choice in ("o", "d", "r"):
+                dup_choice = click.prompt("       Choice", default="s").strip().lower()
+                if dup_choice in ("o", "d", "s", "r"):
                     break
-                click.echo(click.style("       Please enter o, d, or r.", fg="yellow"))
+                click.echo(click.style("       Please enter o, d, s, or r.", fg="yellow"))
 
             if dup_choice == "o":
                 pipeline.config.metadata.duplicate_action = "import"
@@ -890,7 +891,16 @@ def review_accept(
                 click.echo(f"  🗑   {target.name}")
                 click.echo()
                 continue
-            else:  # r — keep in review
+            elif dup_choice == "r":  # rematch
+                id_hint = f"--id {queue_pos}" if queue_pos else "--id <N>"
+                click.echo(click.style(
+                    f"  ↩   {target.name} — kept in review for rematching.\n"
+                    f"      Run: libris rematch {id_hint}",
+                    dim=True,
+                ))
+                click.echo()
+                continue
+            else:  # s — skip, leave in review
                 click.echo(click.style(
                     f"  ↩   {target.name} — kept in review "
                     f"(run 'libris review-accept --id {queue_pos} --overwrite' to import).",
@@ -1613,13 +1623,14 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                 click.echo("  What would you like to do?")
                 click.echo("  [o]  Overwrite — replace the existing Calibre entry")
                 click.echo("  [d]  Discard   — delete this file from the review queue")
-                click.echo("  [r]  Try a different match")
+                click.echo("  [s]  Skip      — leave in review (use --overwrite later)")
+                click.echo("  [r]  Rematch   — try a different match")
                 click.echo()
                 while True:
                     dup_choice = click.prompt("  Choice", default="r").strip().lower()
-                    if dup_choice in ("o", "d", "r"):
+                    if dup_choice in ("o", "d", "s", "r"):
                         break
-                    click.echo(click.style("  Please enter o, d, or r.", fg="yellow"))
+                    click.echo(click.style("  Please enter o, d, s, or r.", fg="yellow"))
 
                 if dup_choice == "o":
                     # import_from_record re-downloads cover using the stored URL
@@ -1651,7 +1662,14 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                     click.echo()
                     return
 
-                else:  # r — try a different match
+                elif dup_choice == "s":  # skip — leave in review
+                    click.echo(click.style(
+                        f"  ↩   {file_path.name} — kept in review.", dim=True
+                    ))
+                    click.echo()
+                    return
+
+                else:  # r — rematch: go back to the query loop
                     click.echo()
                     continue  # back to rematch loop
 

@@ -445,9 +445,10 @@ If you run `review-accept` on a file that turns out to be a duplicate (e.g. it w
 
        [o]  Overwrite — replace the existing Calibre entry
        [d]  Discard   — delete this file from the review queue
-       [r]  Keep      — leave in review (use --overwrite later)
+       [s]  Skip      — leave in review (use --overwrite later)
+       [r]  Rematch   — find a different book match
 
-       Choice [r]:
+       Choice [s]:
 ```
 
 The same prompt appears during `rematch` if the candidate you pick is already in Calibre — you can overwrite, discard, or `[r]` go back and try a different match without losing your place.
