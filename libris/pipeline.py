@@ -27,7 +27,7 @@ from .config import Config
 from .ebook import converter as ebook_conv
 from .exceptions import BookPipelineError, ClassificationError
 from .metadata import resolve_metadata
-from .metadata.base import MetadataResult
+from .metadata.base import MetadataResult, SearchQuery
 from .notifier import Notifier
 from .state import FileRecord, FileState, StateStore
 from .watcher import FileEvent, get_watcher
