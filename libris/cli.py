@@ -7,6 +7,7 @@ Commands:
   libris list-review     — Show all files in REVIEW state
   libris show-cover      — Open the matched cover image in the default browser
   libris review-accept   — Force-import a file from review/, bypassing confidence check
+  libris review-discard  — Delete a review-queue file (e.g. confirmed duplicate)
   libris reset           — Reset stuck PROCESSING records back to INCOMING
   libris recover         — Move failed files back to review/ for re-processing
   libris list-pending    — Show multi-part audiobooks waiting for sibling parts
@@ -153,6 +154,9 @@ def _render_review_record(i: int, r) -> None:
     # Duplicate warning — shown before the match block
     if r.error_msg and r.error_msg.startswith("Duplicate:"):
         click.echo(click.style(f"        ⚠  {r.error_msg}", fg="yellow"))
+        click.echo(click.style(
+            f"           To delete: libris review-discard --id {i}", dim=True
+        ))
 
     if not _has_match(r):
         click.echo(click.style("        [!] No match found", fg="yellow"))
@@ -457,6 +461,8 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo("  Accept by path:  libris review-accept \"<path>\"")
     click.echo("  Fix bad match:   libris rematch --id <N>")
     click.echo("  Preview cover:   libris show-cover --id <N>")
+    click.echo("  Discard:         libris review-discard --id <N>")
+    click.echo("  Discard dupes:   libris review-discard --duplicates")
     if stale_count:
         click.echo()
         click.echo(click.style(
@@ -529,6 +535,101 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
     click.echo(f"  Accept:      libris review-accept --id {review_id}")
     click.echo(f"  Fix match:   libris rematch --id {review_id}")
     click.echo()
+
+
+@main.command("review-discard")
+@click.option("--id", "review_id", type=int, default=None,
+              help="Discard by review queue position (from 'libris list-review')")
+@click.option("--duplicates", "duplicates_only", is_flag=True, default=False,
+              help="Discard all items flagged as duplicates")
+@click.option("--all", "discard_all", is_flag=True, default=False,
+              help="Discard every item in the review queue")
+@_CONFIG_OPTION
+def review_discard(
+    review_id: Optional[int],
+    duplicates_only: bool,
+    discard_all: bool,
+    config_path: Optional[Path],
+) -> None:
+    """Delete a review-queue file and remove it from the queue.
+
+    The file is permanently deleted from disk and the record is marked so it
+    won't be re-imported by a future scan.  Use this to clean up duplicates
+    or files you simply don't want in your library.
+
+    \b
+      libris review-discard --id 1           # discard one item
+      libris review-discard --duplicates     # discard all detected duplicates
+      libris review-discard --all            # discard every item in review
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+
+    n_flags = sum([review_id is not None, duplicates_only, discard_all])
+    if n_flags == 0:
+        _die(
+            "Provide one of: --id <N>, --duplicates, or --all\n"
+            "  Run 'libris list-review' to see queued files and their IDs."
+        )
+    if n_flags > 1:
+        _die("Only one of --id, --duplicates, or --all may be used at a time.")
+
+    store = StateStore(config.paths.state_db)
+    records, _ = _live_review_records(store)
+
+    if not records:
+        store.close()
+        click.echo("\n  No files in review queue.\n")
+        return
+
+    # Determine target records
+    if review_id is not None:
+        if review_id < 1 or review_id > len(records):
+            store.close()
+            _die(
+                f"ID {review_id} out of range — queue has {len(records)} item(s).\n"
+                "  Run 'libris list-review' to see current IDs."
+            )
+        targets = [(review_id, records[review_id - 1])]
+    elif duplicates_only:
+        targets = [
+            (i, r) for i, r in enumerate(records, 1)
+            if r.error_msg and r.error_msg.startswith("Duplicate:")
+        ]
+        if not targets:
+            store.close()
+            click.echo("\n  No duplicate items in review queue.\n")
+            return
+    else:  # --all
+        targets = list(enumerate(records, 1))
+
+    click.echo()
+    any_failed = False
+
+    for queue_pos, record in targets:
+        file_path = Path(record.current_path)
+        name = file_path.name
+
+        # Show what we're about to delete with duplicate context if available
+        dup_note = ""
+        if record.error_msg and record.error_msg.startswith("Duplicate:"):
+            # Extract "ID(s): N" from the error_msg for a compact display
+            dup_note = click.style(f"  ({record.error_msg})", dim=True)
+
+        try:
+            file_path.unlink(missing_ok=True)
+            # Mark IMPORTED so re-scans don't pick it up again
+            record.state = FileState.IMPORTED
+            record.error_msg = f"Discarded by user (was in review/{name})"
+            store.upsert(record)
+            click.echo(f"  🗑   [{queue_pos}] {name}{dup_note}")
+        except Exception as exc:
+            click.echo(click.style(f"  ❌  [{queue_pos}] {name}: {exc}", fg="red"), err=True)
+            any_failed = True
+
+    store.close()
+    click.echo()
+    sys.exit(1 if any_failed else 0)
 
 
 @main.command("review-accept")
