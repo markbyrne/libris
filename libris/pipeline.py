@@ -560,7 +560,21 @@ class Pipeline:
     # ------------------------------------------------------------------
 
     def _process_ebook(self, path: Path, record: FileRecord) -> FileRecord:
-        """Convert (if needed) and import an ebook to Calibre."""
+        """Convert (if needed) and import an ebook to Calibre.
+
+        Behaviour is controlled by two config settings:
+
+        ``output.preferred_ebook_format`` (epub | mobi)
+            Target format for conversion.
+
+        ``output.ebook_format_policy`` (preferred | all)
+            preferred — Convert files not already in the preferred format,
+                        import only the converted copy, then delete the
+                        original source file.
+            all       — Import the file in whatever format it arrived.
+                        No conversion is performed; Calibre stores the
+                        native format as-is.
+        """
         if path.is_dir():
             # Ebook directories are not supported — we don't know which file
             # to use or how to merge them.  Fail clearly rather than crashing
@@ -572,16 +586,35 @@ class Pipeline:
             )
 
         ext = path.suffix.lstrip(".").lower()
+        preferred = self.config.output.preferred_ebook_format   # "epub" | "mobi"
+        policy = self.config.output.ebook_format_policy         # "preferred" | "all"
 
-        if ext == "epub":
-            epub_path = path
+        if policy == "all":
+            # Import in whatever format arrived — no conversion.
+            book_path = path
+            log.info(
+                "pipeline.ebook.import_as_is",
+                extra={"format": ext, "file": str(path)},
+            )
+        elif ext == preferred:
+            # Already in the preferred format — nothing to convert.
+            book_path = path
         else:
-            log.info("pipeline.ebook.converting", extra={"from": ext, "file": str(path)})
-            epub_path = ebook_conv.to_epub(path, self._calibre)
+            # Convert to preferred format; write to staging/ so incoming/ stays clean.
+            log.info(
+                "pipeline.ebook.converting",
+                extra={"from": ext, "to": preferred, "file": str(path)},
+            )
+            book_path = ebook_conv.to_format(
+                path,
+                preferred,
+                self.config.paths.staging_dir,
+                self._calibre,
+            )
 
-        # ── Metadata lookup for ebooks ────────────────────────────────
+        # ── Metadata lookup ───────────────────────────────────────────
         result = resolve_metadata(
-            epub_path.stem,
+            book_path.stem,
             self.config.metadata,
             embed_cover=self.config.output.embed_cover_art,
         )
@@ -590,25 +623,34 @@ class Pipeline:
         record.confidence = result.confidence
 
         if not result.above_threshold:
-            log.info("pipeline.ebook.low_confidence",
-                     extra={"confidence": result.confidence, "title": result.title})
-            return self._mark_review(record, result, epub_path)
+            log.info(
+                "pipeline.ebook.low_confidence",
+                extra={"confidence": result.confidence, "title": result.title},
+            )
+            return self._mark_review(record, result, book_path)
 
         # ── Duplicate check ───────────────────────────────────────────
-        dup_record = self._handle_duplicate(record, result, epub_path)
+        dup_record = self._handle_duplicate(record, result, book_path)
         if dup_record is not None:
             return dup_record
 
-        book_id = self._calibre.add_book(epub_path)
+        book_id = self._calibre.add_book(book_path)
         record.calibre_book_id = book_id
-        log.info("pipeline.ebook.imported", extra={"book_id": book_id, "file": str(epub_path)})
+        log.info(
+            "pipeline.ebook.imported",
+            extra={"book_id": book_id, "file": str(book_path), "format": book_path.suffix},
+        )
 
         # ── Full metadata + cover in Calibre ──────────────────────────
         self._calibre.set_metadata(book_id, result)
         if self.config.output.embed_cover_art and result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
 
-        return self._mark_imported(record, epub_path, path, result)
+        # _mark_imported deletes book_path (staging converted copy) if it
+        # differs from path (source), then deletes path (source).  In
+        # "preferred" mode this cleans up both.  In "all" mode book_path==path
+        # so only the source is removed (which is normal post-import cleanup).
+        return self._mark_imported(record, book_path, path, result)
 
     # ------------------------------------------------------------------
     # State transition helpers

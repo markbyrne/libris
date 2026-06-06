@@ -61,6 +61,12 @@ class OutputConfig:
     preferred_ebook_format: str = "epub"      # epub | mobi
     preferred_audio_format: str = "m4b"       # m4b (only recommended option)
     embed_cover_art: bool = True              # download and embed cover images
+    # Controls how non-preferred-format ebooks are handled on import:
+    #   preferred — convert to preferred_ebook_format, import the converted
+    #               file only, then delete the original source file
+    #   all       — import the file in whatever format it arrived (no
+    #               conversion); Calibre stores the native format as-is
+    ebook_format_policy: str = "preferred"
 
 
 @dataclass
@@ -200,14 +206,23 @@ def load_config(config_path: Path) -> Config:
                       or output_raw.get("preferred_ebook_format", "epub")
     preferred_audio = os.environ.get("LIBRIS_OUTPUT_PREFERRED_AUDIO_FORMAT") \
                       or output_raw.get("preferred_audio_format", "m4b")
+    ebook_format_policy = (
+        os.environ.get("LIBRIS_OUTPUT_EBOOK_FORMAT_POLICY")
+        or output_raw.get("ebook_format_policy", "preferred")
+    )
     if preferred_ebook not in ("epub", "mobi"):
         raise ConfigError(f"output.preferred_ebook_format must be 'epub' or 'mobi', got: {preferred_ebook!r}")
     if preferred_audio not in ("m4b",):
         raise ConfigError(f"output.preferred_audio_format must be 'm4b', got: {preferred_audio!r}")
+    if ebook_format_policy not in ("preferred", "all"):
+        raise ConfigError(
+            f"output.ebook_format_policy must be 'preferred' or 'all', got: {ebook_format_policy!r}"
+        )
     output = OutputConfig(
         preferred_ebook_format=preferred_ebook,
         preferred_audio_format=preferred_audio,
         embed_cover_art=_bool_env("LIBRIS_OUTPUT_EMBED_COVER_ART", output_raw.get("embed_cover_art", True)),
+        ebook_format_policy=ebook_format_policy,
     )
 
     # ---- ntfy ----

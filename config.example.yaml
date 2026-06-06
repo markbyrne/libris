@@ -61,6 +61,13 @@ output:
   # Download and embed cover art from Google Books / OpenLibrary
   embed_cover_art: true
 
+  # Controls how ebooks that are not in the preferred format are handled:
+  #   preferred — convert to preferred_ebook_format, import the converted
+  #               file only, and delete the original source file afterwards
+  #   all       — import the file in whatever format it arrived; no
+  #               conversion is performed and Calibre stores the native format
+  ebook_format_policy: preferred
+
 ntfy:
   # ntfy.sh topic name (required for notifications)
   topic: my-libris

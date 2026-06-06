@@ -394,6 +394,7 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  Confidence:     {config.metadata.confidence_threshold}")
     click.echo(f"  Duplicates:     {config.metadata.duplicate_action}")
     click.echo(f"  Mock mode:      {config.metadata.mock_mode}")
+    click.echo(f"  Ebook format:   {config.output.preferred_ebook_format}  (policy: {config.output.ebook_format_policy})")
     _scan = config.watcher.scan_interval_hours
     _scan_str = f"every {_scan:g}h" if _scan > 0 else "disabled"
     click.echo(f"  Folder scan:    on startup + {_scan_str}")

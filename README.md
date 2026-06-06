@@ -107,6 +107,10 @@ calibre:
 metadata:
   confidence_threshold: 0.75
 
+output:
+  preferred_ebook_format: epub   # epub | mobi
+  ebook_format_policy: preferred # preferred | all (see below)
+
 ntfy:
   topic: my-libris-alerts
   enabled: true
@@ -138,6 +142,36 @@ To get a key:
 4. Go to **Credentials** → **Create credentials** → **API key**
 
 If you hit a rate limit during `libris rematch`, it will prompt you to add a key and save it to your config automatically.
+
+### Ebook format policy
+
+`output.ebook_format_policy` controls how files that aren't already in the preferred format are handled:
+
+| Policy | Behaviour |
+|--------|-----------|
+| `preferred` (default) | Convert to `preferred_ebook_format`, import the converted file, delete the original source |
+| `all` | Import the file in whatever format it arrived — no conversion; Calibre stores the native format |
+
+Examples:
+
+```yaml
+output:
+  preferred_ebook_format: epub
+
+  # Convert everything to EPUB, delete the source PDF/MOBI/etc.
+  ebook_format_policy: preferred
+
+  # OR: import as-is — PDF stays PDF, MOBI stays MOBI
+  # ebook_format_policy: all
+```
+
+Environment variable: `LIBRIS_OUTPUT_EBOOK_FORMAT_POLICY`
+
+`libris check-config` shows the resolved setting:
+
+```
+  Ebook format:   epub  (policy: preferred)
+```
 
 ### Multi-part audiobook timeout
 
@@ -577,8 +611,10 @@ Duplicate candidates (same book, different editions) are deduplicated before sco
 
 | Type | Formats |
 |------|---------|
-| Ebook | epub, mobi, pdf, azw, azw3, cbz, cbr, djvu |
+| Ebook | epub, mobi, pdf, azw, azw3, cbz, cbr, djvu, and more |
 | Audiobook | mp3, m4a, m4b, flac, ogg, aac, opus, wav |
+
+All ebook formats are converted to your `preferred_ebook_format` (default: epub) before import unless `ebook_format_policy: all` is set.
 
 Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of audio files) are also supported — drop the whole directory into `incoming/` and it will be combined and imported as a single M4B.
 
