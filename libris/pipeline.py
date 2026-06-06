@@ -556,13 +556,19 @@ class Pipeline:
         for audio_file in audio_files:
             file_record = self._get_or_create_record(audio_file, "audiobook")
 
-            # Skip files already handled (e.g. a partial-run restart)
             if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
-                log.info(
-                    "pipeline.audio.folder_skip",
-                    extra={"file": audio_file.name, "state": file_record.state.value},
-                )
-                continue
+                # If the file is still at its original path the previous run
+                # didn't clean it up — reset and re-process rather than skip.
+                if Path(file_record.original_path).resolve() == audio_file.resolve():
+                    log.info("pipeline.audio.folder_reprocess", extra={"file": audio_file.name})
+                    file_record.state = FileState.INCOMING
+                    self._store.upsert(file_record)
+                else:
+                    log.info(
+                        "pipeline.audio.folder_skip",
+                        extra={"file": audio_file.name, "state": file_record.state.value},
+                    )
+                    continue
             if (file_record.state == FileState.PENDING_PARTS
                     and Path(file_record.current_path).exists()):
                 continue  # already staged, waiting for sibling parts
@@ -584,11 +590,16 @@ class Pipeline:
             file_record = self._get_or_create_record(ebook_file, "ebook")
 
             if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
-                log.info(
-                    "pipeline.ebook.folder_skip",
-                    extra={"file": ebook_file.name, "state": file_record.state.value},
-                )
-                continue
+                if Path(file_record.original_path).resolve() == ebook_file.resolve():
+                    log.info("pipeline.ebook.folder_reprocess", extra={"file": ebook_file.name})
+                    file_record.state = FileState.INCOMING
+                    self._store.upsert(file_record)
+                else:
+                    log.info(
+                        "pipeline.ebook.folder_skip",
+                        extra={"file": ebook_file.name, "state": file_record.state.value},
+                    )
+                    continue
 
             file_record.state = FileState.PROCESSING
             self._store.upsert(file_record)
@@ -602,14 +613,15 @@ class Pipeline:
                 )
                 last_record = self._mark_failed(file_record, exc)
 
-        # Each file was moved/converted/deleted by its individual processing
-        # step; the directory should now be empty.  Clean it up if possible.
-        try:
-            folder.rmdir()
+        # All book files have been moved out of the folder by their individual
+        # processing steps (to staging, review, failed, or Calibre).  Remove
+        # whatever remains (.DS_Store, cover art, NFO, etc.) so incoming/ stays
+        # clean.  shutil.rmtree handles non-empty directories that rmdir cannot.
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
             log.info("pipeline.folder_cleaned", extra={"folder": str(folder)})
-        except OSError:
-            # Not empty — some files may have failed; leave for the user.
-            log.debug("pipeline.folder_not_empty", extra={"folder": str(folder)})
+        else:
+            log.warning("pipeline.folder_cleanup_failed", extra={"folder": str(folder)})
 
         # Mark the directory's own record as a processed container so the
         # periodic scan never re-dispatches it.
