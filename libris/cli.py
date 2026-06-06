@@ -893,10 +893,27 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
         if not all_results:
             click.echo()
             click.echo("  No results found.")
-            if _by not in query_str.lower():
+
+            # Try DDG to surface an author/ISBN hint for the user
+            from .metadata.ddg import search_book_hints
+            with httpx.Client(timeout=8.0) as _ddg_client:
+                _hints = search_book_hints(_parsed_title, _ddg_client)
+            if _hints:
+                click.echo()
+                click.echo(click.style("  Web search suggests:", bold=True))
+                if _hints.get("author"):
+                    click.echo(click.style(f'    Author:  {_hints["author"]}', fg="cyan"))
+                    click.echo(click.style(
+                        f'    Try:     {_parsed_title} by {_hints["author"]}',
+                        dim=True,
+                    ))
+                if _hints.get("isbn"):
+                    click.echo(click.style(f'    ISBN:    {_hints["isbn"]}', fg="cyan"))
+                if _hints.get("year"):
+                    click.echo(click.style(f'    Year:    {_hints["year"]}', fg="cyan"))
+            elif _by not in query_str.lower():
                 click.echo(click.style(
-                    "  Tip: add the author using 'by' — "
-                    f'"{_parsed_title} by <Author Name>"',
+                    f'  Tip: add the author using \'by\' — "{_parsed_title} by <Author Name>"',
                     dim=True,
                 ))
             click.prompt("\n  Press Enter to refine", default="", show_default=False)

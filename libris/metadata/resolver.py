@@ -101,6 +101,43 @@ def resolve_metadata(
                 extra={"source": exc.source, "retry_after": exc.retry_after},
             )
 
+        # ── Zero-result fallback: DDG web search ──────────────────────────
+        # Both APIs returned nothing.  Hit DuckDuckGo Instant Answers to extract
+        # author/ISBN hints (Wikipedia-backed infobox), then retry once.
+        if not google_scored and not ol_scored:
+            from .ddg import search_book_hints
+            hints = search_book_hints(query.clean_title, _client)
+            if hints:
+                log.info(
+                    "metadata.ddg_retry",
+                    extra={
+                        "title": query.clean_title,
+                        "author": hints.get("author"),
+                        "isbn": hints.get("isbn"),
+                    },
+                )
+                retry_query = SearchQuery(
+                    clean_title=query.clean_title,
+                    author_hint=hints.get("author") or query.author_hint,
+                    isbn=hints.get("isbn") or query.isbn,
+                    year_hint=int(hints["year"]) if hints.get("year") else query.year_hint,
+                    series_hint=query.series_hint,
+                    series_index_hint=query.series_index_hint,
+                )
+                try:
+                    google_scored = google_books.fetch(
+                        retry_query, api_key=config.google_books_api_key, client=_client
+                    )
+                except RateLimitError:
+                    pass
+                try:
+                    ol_scored = open_library.fetch(retry_query, client=_client)
+                except RateLimitError:
+                    pass
+                # If the retry found candidates, use the enriched query for scoring
+                if google_scored or ol_scored:
+                    query = retry_query
+
     # ── Fuse & score ─────────────────────────────────────────────────────
     result = build_result(query, google_scored, ol_scored, config.confidence_threshold)
 
