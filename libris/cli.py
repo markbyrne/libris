@@ -438,7 +438,8 @@ def list_review(config_path: Optional[Path]) -> None:
         click.echo("  No files in review.")
         if stale_count:
             click.echo(click.style(
-                f"  ⚠   {stale_count} record(s) skipped — file no longer at expected path.",
+                f"  ⚠   {stale_count} record(s) skipped — file no longer at expected path.\n"
+                f"      Clean up: libris review-discard --stale",
                 fg="yellow",
             ))
         if failed_records:
@@ -469,7 +470,8 @@ def list_review(config_path: Optional[Path]) -> None:
     if stale_count:
         click.echo()
         click.echo(click.style(
-            f"  ⚠   {stale_count} record(s) not shown — file moved or deleted.",
+            f"  ⚠   {stale_count} record(s) not shown — file moved or deleted.\n"
+            f"      Clean up: libris review-discard --stale",
             fg="yellow",
         ))
     if failed_records:
@@ -551,11 +553,14 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
               help="Discard all items flagged as duplicates")
 @click.option("--all", "discard_all", is_flag=True, default=False,
               help="Discard every item in the review queue")
+@click.option("--stale", "discard_stale", is_flag=True, default=False,
+              help="Remove DB records for review items whose file no longer exists on disk")
 @_CONFIG_OPTION
 def review_discard(
     review_id: Optional[int],
     duplicates_only: bool,
     discard_all: bool,
+    discard_stale: bool,
     config_path: Optional[Path],
 ) -> None:
     """Delete a review-queue file and remove it from the queue.
@@ -567,21 +572,43 @@ def review_discard(
     \b
       libris review-discard --id 1           # discard one item
       libris review-discard --duplicates     # discard all detected duplicates
+      libris review-discard --stale          # remove records where the file is already gone
       libris review-discard --all            # discard every item in review
     """
     path = _resolve_config(config_path)
     config = load_config(path)
 
-    n_flags = sum([review_id is not None, duplicates_only, discard_all])
+    n_flags = sum([review_id is not None, duplicates_only, discard_all, discard_stale])
     if n_flags == 0:
         _die(
-            "Provide one of: --id <N>, --duplicates, or --all\n"
+            "Provide one of: --id <N>, --duplicates, --stale, or --all\n"
             "  Run 'libris list-review' to see queued files and their IDs."
         )
     if n_flags > 1:
-        _die("Only one of --id, --duplicates, or --all may be used at a time.")
+        _die("Only one of --id, --duplicates, --stale, or --all may be used at a time.")
 
     store = StateStore(config.paths.state_db)
+
+    # --stale: clean up records whose file has already been removed from disk
+    if discard_stale:
+        all_review = store.list_by_state(FileState.REVIEW)
+        stale = [r for r in all_review if not Path(r.current_path).exists()]
+        if not stale:
+            store.close()
+            click.echo("\n  No stale records found.\n")
+            return
+        click.echo()
+        for record in stale:
+            name = Path(record.current_path).name
+            record.state = FileState.IMPORTED
+            record.error_msg = f"Pruned: file no longer at expected path ({record.current_path})"
+            store.upsert(record)
+            click.echo(f"  🧹  {name}")
+            click.echo(click.style(f"       was: {record.current_path}", dim=True))
+        store.close()
+        click.echo()
+        return
+
     records, _ = _live_review_records(store)
 
     if not records:

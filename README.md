@@ -334,6 +334,7 @@ To delete the duplicate instead, use `review-discard`:
 ```bash
 libris review-discard --id 1          # delete this one
 libris review-discard --duplicates    # delete all duplicate-flagged items
+libris review-discard --stale         # remove DB records where the file is already gone
 ```
 
 ---
