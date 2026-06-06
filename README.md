@@ -74,17 +74,35 @@ pip install -e ".[dev]"
 
 ### Config file discovery
 
-Libris looks for a config file in order — the first one found is used:
+Libris resolves the config file in this order — the first match wins:
 
-1. `config.local.yaml` — in the current directory (git-ignored, ideal for local overrides)
-2. `config.yaml` — in the current directory
-3. `~/.config/libris/config.yaml` — user-level config
+1. `--config <path>` CLI flag
+2. `LIBRIS_CONFIG` environment variable ← **recommended for permanent installs**
+3. `config.local.yaml` in the current directory
+4. `config.yaml` in the current directory
+5. `~/.config/libris/config.yaml`
 
-You can always override with `--config <path>` on any command. For most workflows, creating `config.local.yaml` next to the repo is the simplest setup.
+#### Permanent setup (recommended)
+
+Add to your `~/.zshrc` or `~/.bashrc` so every `libris` command works from any directory:
 
 ```bash
-cp config.example.yaml config.local.yaml
-# Edit config.local.yaml with your paths
+export LIBRIS_CONFIG=~/.config/libris/config.yaml
+```
+
+Then create the config once:
+
+```bash
+mkdir -p ~/.config/libris
+cp /path/to/libris/config.example.yaml ~/.config/libris/config.yaml
+# Edit ~/.config/libris/config.yaml with your paths
+```
+
+#### Per-project override
+
+```bash
+cp config.example.yaml config.local.yaml   # git-ignored
+# Edit config.local.yaml — only used when running from this directory
 ```
 
 ### Minimal config (local Calibre)

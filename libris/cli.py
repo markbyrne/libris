@@ -62,29 +62,47 @@ _CONFIG_OPTION = click.option(
     "config_path",
     default=None,
     type=click.Path(path_type=Path),
-    help="Config file path. Defaults to config.local.yaml in the current directory.",
+    help="Config file path. Overrides LIBRIS_CONFIG and auto-discovery.",
 )
 
 _WEIGHT_MAX = {"isbn": 0.40, "title": 0.30, "author": 0.20, "year": 0.10}
 
 
 def _resolve_config(config_path: Optional[Path]) -> Path:
-    """Return *config_path* if given, otherwise auto-discover from standard locations."""
+    """Return the config path to use, in priority order:
+
+    1. ``--config <path>`` CLI flag
+    2. ``LIBRIS_CONFIG`` environment variable
+    3. ``config.local.yaml`` in the current directory
+    4. ``config.yaml`` in the current directory
+    5. ``~/.config/libris/config.yaml``
+    """
+    import os
+
     if config_path is not None:
         if not config_path.exists():
             _die(f"Config file not found: {config_path}")
         return config_path
+
+    env_path = os.environ.get("LIBRIS_CONFIG")
+    if env_path:
+        p = Path(env_path).expanduser()
+        if not p.exists():
+            _die(f"Config file from LIBRIS_CONFIG not found: {p}")
+        return p
 
     for candidate in _CONFIG_SEARCH_PATHS:
         if candidate.exists():
             click.echo(click.style(f"Using config: {candidate.resolve()}", dim=True))
             return candidate
 
-    tried = "\n".join(f"  {p}" for p in _CONFIG_SEARCH_PATHS)
+    tried = "\n".join(f"  {p.resolve()}" for p in _CONFIG_SEARCH_PATHS)
     _die(
         f"No config file found. Tried:\n{tried}\n"
-        "Create config.local.yaml (cp config.example.yaml config.local.yaml) "
-        "or pass --config <path>."
+        "Options:\n"
+        "  Set LIBRIS_CONFIG=/path/to/config.yaml in your shell profile\n"
+        "  Copy config:  cp config.example.yaml ~/.config/libris/config.yaml\n"
+        "  Pass flag:    libris --config /path/to/config.yaml <command>"
     )
 
 
