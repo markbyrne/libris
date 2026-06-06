@@ -268,12 +268,29 @@ class Pipeline:
 
         # ── Dedup check ───────────────────────────────────────────────
         record = self._get_or_create_record(path, media_type.value)
-        if record.state in (FileState.IMPORTED, FileState.PROCESSING, FileState.PENDING_PARTS):
+
+        if record.state in (FileState.IMPORTED, FileState.PROCESSING):
             log.info(
                 "pipeline.skip_duplicate",
                 extra={"path": str(path), "state": record.state.value},
             )
             return record
+
+        if record.state == FileState.PENDING_PARTS:
+            # Only skip if the staged file is still where the DB says it is.
+            # If the user moved a part back to incoming/ after a failed combine,
+            # current_path will point to a non-existent staging/pending path —
+            # fall through so the file is re-staged and the path is corrected.
+            if Path(record.current_path).exists():
+                log.info(
+                    "pipeline.skip_duplicate",
+                    extra={"path": str(path), "state": record.state.value},
+                )
+                return record
+            log.info(
+                "pipeline.pending_part_restage",
+                extra={"path": str(path), "stale_path": record.current_path},
+            )
 
         # ── Process ───────────────────────────────────────────────────
         record.state = FileState.PROCESSING
@@ -370,13 +387,23 @@ class Pipeline:
             },
         )
 
-        # Only attempt auto-combine when we know the total and it's now complete
+        # Only attempt auto-combine when we know the total and it's now complete.
+        # Count only parts whose files are actually present on disk — stale DB
+        # records from a previous failed combine should not block or trigger a
+        # combine with missing files.
         if total_parts is not None:
             group_records = self._store.list_pending_group(group_key)
-            received = {r.part_num for r in group_records if r.part_num is not None}
+            received = {
+                r.part_num for r in group_records
+                if r.part_num is not None and Path(r.current_path).exists()
+            }
             expected = set(range(1, total_parts + 1))
             if received >= expected:
-                return self._combine_pending_group(group_key, group_records)
+                # Filter to only records with present files before combining
+                live_records = [
+                    r for r in group_records if Path(r.current_path).exists()
+                ]
+                return self._combine_pending_group(group_key, live_records)
 
         self._notifier.send_pending_parts_alert(record)
         return record
