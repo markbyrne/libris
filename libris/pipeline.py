@@ -329,16 +329,29 @@ class Pipeline:
         part_num: int,
         total_parts: Optional[int],
     ) -> FileRecord:
-        """Stage a single part file and combine+import when the set is complete."""
+        """Stage a single part file and combine+import when the set is complete.
+
+        Non-M4B parts (e.g. MP3, M4A) are converted to M4B before staging so
+        that combine_parts can always stream-copy homogeneous AAC input.
+        """
         # Build stable group key: clean title with part marker stripped
         stripped_stem = strip_part_marker(path.stem)
         group_key = (clean_query(stripped_stem) or stripped_stem).lower().strip()
 
-        # Move part to pending staging area
         pending_dir = self.config.paths.staging_dir / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
-        dest = pending_dir / path.name
-        _safe_move(path, dest)
+
+        # Convert to M4B before staging if not already — ensures combine_parts
+        # can stream-copy (-c copy) without mismatched codec errors.
+        ext = path.suffix.lstrip(".").lower()
+        if ext != "m4b":
+            log.info("pipeline.audio.converting_part", extra={"file": path.name})
+            dest = pending_dir / (path.stem + ".m4b")
+            audio_conv.convert_to_m4b(path, dest)
+            path.unlink(missing_ok=True)
+        else:
+            dest = pending_dir / path.name
+            _safe_move(path, dest)
 
         record.part_num = part_num
         record.total_parts = total_parts

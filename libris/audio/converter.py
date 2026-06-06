@@ -84,12 +84,17 @@ def combine_parts(
                 dur_ms = _extract_chapters(part, offset_ms, metadata_file)
                 offset_ms += dur_ms
 
-        # ── Pass 1: concatenate all parts ────────────────────────────────
+        # ── Pass 1: concatenate all parts (stream-copy, no re-encode) ───────
+        # Using -c copy avoids encoder initialisation errors (e.g.
+        # "Could not open encoder before EOF") that occur when ffmpeg tries
+        # to transcode already-AAC M4B parts.  Parts are guaranteed to be
+        # M4B/AAC by the time they reach this function — see
+        # _handle_pending_part in pipeline.py which converts non-M4B files
+        # before staging.
         _run([
             "ffmpeg", "-f", "concat", "-safe", "0",
             "-i", str(filelist),
-            "-c:a", "aac", "-b:a", "128k",
-            "-f", "mp4",
+            "-c", "copy",
             str(combined), "-y",
         ], f"concatenate {len(parts)} parts")
 
