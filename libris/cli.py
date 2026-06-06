@@ -130,6 +130,50 @@ def _hyperlink(url: str, text: str) -> str:
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
+def _live_review_records(store: "StateStore") -> list:
+    """Return REVIEW records whose file still exists on disk, in stable order.
+
+    Records pointing to files that have been moved or deleted are silently
+    excluded so list-review, rematch, review-accept, and show-cover all
+    share the same consistent positional IDs.
+
+    Returns (live_records, stale_count).
+    """
+    records = store.list_by_state(FileState.REVIEW)
+    live = [r for r in records if Path(r.current_path).exists()]
+    return live, len(records) - len(live)
+
+
+def _render_review_record(i: int, r) -> None:
+    """Print a single review-queue entry (shared by list-review and show-cover)."""
+    click.echo(f"  [{i}]  {Path(r.current_path).name}")
+
+    if not _has_match(r):
+        click.echo(click.style("        [!] No match found", fg="yellow"))
+    else:
+        matched = r.matched_title or "(unknown)"
+        if r.matched_author:
+            matched += f"  by {r.matched_author}"
+        conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
+
+        pub_parts = []
+        if r.matched_year:
+            pub_parts.append(str(r.matched_year))
+        if r.matched_publisher:
+            pub_parts.append(r.matched_publisher)
+        if r.matched_isbn:
+            pub_parts.append(f"ISBN {r.matched_isbn}")
+
+        click.echo(f"        Matched:  {matched}")
+        click.echo(f"        Score:    {conf}")
+        if pub_parts:
+            click.echo(f"        Info:     {' · '.join(pub_parts)}")
+        if r.matched_cover_url:
+            click.echo(f"        Cover:    libris show-cover --id {i}")
+
+    click.echo(f"        Path:     \"{r.current_path}\"")
+
+
 # ---------------------------------------------------------------------------
 # Rate-limit helpers (used by rematch)
 # ---------------------------------------------------------------------------
@@ -368,13 +412,18 @@ def list_review(config_path: Optional[Path]) -> None:
     path = _resolve_config(config_path)
     config = load_config(path)
     store = StateStore(config.paths.state_db)
-    records = store.list_by_state(FileState.REVIEW)
+    records, stale_count = _live_review_records(store)
     failed_records = store.list_by_state(FileState.FAILED)
     store.close()
 
     click.echo()
     if not records:
         click.echo("  No files in review.")
+        if stale_count:
+            click.echo(click.style(
+                f"  ⚠   {stale_count} record(s) skipped — file no longer at expected path.",
+                fg="yellow",
+            ))
         if failed_records:
             click.echo()
             click.echo(click.style(
@@ -389,32 +438,7 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo()
 
     for i, r in enumerate(records, 1):
-        click.echo(f"  [{i}]  {Path(r.current_path).name}")
-
-        if not _has_match(r):
-            click.echo(click.style("        [!] No match found", fg="yellow"))
-        else:
-            matched = r.matched_title or "(unknown)"
-            if r.matched_author:
-                matched += f"  by {r.matched_author}"
-            conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
-
-            pub_parts = []
-            if r.matched_year:
-                pub_parts.append(str(r.matched_year))
-            if r.matched_publisher:
-                pub_parts.append(r.matched_publisher)
-            if r.matched_isbn:
-                pub_parts.append(f"ISBN {r.matched_isbn}")
-
-            click.echo(f"        Matched:  {matched}")
-            click.echo(f"        Score:    {conf}")
-            if pub_parts:
-                click.echo(f"        Info:     {' · '.join(pub_parts)}")
-            if r.matched_cover_url:
-                click.echo(f"        Cover:    libris show-cover --id {i}")
-
-        click.echo(f"        Path:     \"{r.current_path}\"")
+        _render_review_record(i, r)
         click.echo()
 
     click.echo(_hr())
@@ -423,6 +447,12 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo("  Accept by path:  libris review-accept \"<path>\"")
     click.echo("  Fix bad match:   libris rematch --id <N>")
     click.echo("  Preview cover:   libris show-cover --id <N>")
+    if stale_count:
+        click.echo()
+        click.echo(click.style(
+            f"  ⚠   {stale_count} record(s) not shown — file moved or deleted.",
+            fg="yellow",
+        ))
     if failed_records:
         click.echo()
         click.echo(click.style(
@@ -445,7 +475,7 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
     path = _resolve_config(config_path)
     config = load_config(path)
     store = StateStore(config.paths.state_db)
-    records = store.list_by_state(FileState.REVIEW)
+    records, _ = _live_review_records(store)
     store.close()
 
     if not records:
@@ -470,12 +500,25 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
     import platform
     url = record.matched_cover_url
     opener = "open" if platform.system() == "Darwin" else "xdg-open"
+    click.echo()
     try:
         subprocess.run([opener, url], check=True)
-        click.echo(f"\n  Opened cover for: {record.matched_title or Path(record.current_path).name}\n")
+        click.echo(click.style("  ✅  Cover opened in browser", fg="green"))
     except Exception as exc:
-        click.echo(click.style(f"\n  Failed to open cover: {exc}\n", fg="red"), err=True)
-        click.echo(f"  URL: {url}\n")
+        click.echo(click.style(f"  ❌  Failed to open cover: {exc}", fg="red"), err=True)
+        click.echo(f"  URL: {url}")
+        click.echo()
+        return
+
+    # Re-render the record so the user has full context alongside the browser window
+    click.echo()
+    click.echo(_hr())
+    _render_review_record(review_id, record)
+    click.echo()
+    click.echo(_hr())
+    click.echo(f"  Accept:      libris review-accept --id {review_id}")
+    click.echo(f"  Fix match:   libris rematch --id {review_id}")
+    click.echo()
 
 
 @main.command("review-accept")
@@ -517,8 +560,9 @@ def review_accept(
 
     # Build a list of (path, record_or_None, queue_position) triples so we can
     # use cached metadata and show accurate rematch IDs in error messages.
+    # Uses _live_review_records so IDs match what list-review showed.
     if review_id is not None or accept_all:
-        all_records = store.list_by_state(FileState.REVIEW)
+        all_records, _ = _live_review_records(store)
         store.close()
         if not all_records:
             click.echo("\n  No files in review queue.\n")
@@ -753,7 +797,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
     _setup_logging(config.log_level)
 
     store = StateStore(config.paths.state_db)
-    records = store.list_by_state(FileState.REVIEW)
+    records, _ = _live_review_records(store)
     store.close()
 
     if not records:
