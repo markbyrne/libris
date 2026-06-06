@@ -16,6 +16,7 @@ Commands:
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -34,7 +35,7 @@ from .cleaner import clean_query as _clean_query
 from .config import load_config
 from .exceptions import RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
-from .metadata.resolver import _extract_author_hint, _extract_year
+from .metadata.resolver import _extract_author_hint, _extract_year, _extract_series, _SERIES_PREFIX
 from .metadata.scorer import dedup_candidates, score_candidate
 from .pipeline import Pipeline
 from .state import FileState, StateStore
@@ -410,8 +411,7 @@ def list_review(config_path: Optional[Path]) -> None:
             if pub_parts:
                 click.echo(f"        Info:     {' · '.join(pub_parts)}")
             if r.matched_cover_url:
-                link = _hyperlink(r.matched_cover_url, "View cover ↗")
-                click.echo(f"        Cover:    {link}")
+                click.echo(f"        Cover:    {r.matched_cover_url}")
 
         click.echo(f"        Path:     \"{r.current_path}\"")
         click.echo()
@@ -736,7 +736,15 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
     stem = file_path.stem
     author_hint = _extract_author_hint(stem)
     year_hint = _extract_year(stem)
+    series_hint, _ = _extract_series(stem)
     current_query = _clean_query(stem) or stem
+
+    # For "Series N - Book Title" filenames, use just the book title as the
+    # initial query — "Eldest" is far more targeted than "Inheritance Cycle 2 Eldest"
+    _dash_parts = re.split(r"\s[-–—]\s", stem, maxsplit=1)
+    if series_hint and len(_dash_parts) == 2 and _SERIES_PREFIX.match(_dash_parts[0].strip()):
+        current_query = _clean_query(_dash_parts[1]) or _dash_parts[1].strip()
+
     current_source = source
 
     from .metadata import google_books, open_library

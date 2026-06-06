@@ -52,6 +52,13 @@ def resolve_metadata(
     author_hint = _extract_author_hint(stem)
     series_hint, series_index_hint = _extract_series(stem)
 
+    # For "Series N - Book Title" filenames, query by book title only.
+    # "Inheritance Cycle 2 - Eldest" → query "Eldest", not "Inheritance Cycle 2 Eldest",
+    # which would otherwise match a collection box-set instead of the individual book.
+    _dash_parts = re.split(r"\s[-–—]\s", stem, maxsplit=1)
+    if series_hint and len(_dash_parts) == 2 and _SERIES_PREFIX.match(_dash_parts[0].strip()):
+        clean = clean_query(_dash_parts[1]) or _dash_parts[1].strip()
+
     query = SearchQuery(
         clean_title=clean or stem,   # fallback to stem if everything was stripped
         author_hint=author_hint,
