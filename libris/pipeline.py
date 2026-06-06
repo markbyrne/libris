@@ -270,11 +270,29 @@ class Pipeline:
         record = self._get_or_create_record(path, media_type.value)
 
         if record.state in (FileState.IMPORTED, FileState.PROCESSING):
-            log.info(
-                "pipeline.skip_duplicate",
-                extra={"path": str(path), "state": record.state.value},
-            )
-            return record
+            # Directories: always re-dispatch — individual file records handle
+            # their own dedup, so this is safe and necessary to pick up files
+            # inside a directory whose container record was previously marked done.
+            if path.is_dir():
+                log.info("pipeline.directory_redispatch", extra={"path": str(path)})
+                # fall through to re-dispatch
+            # File: a successfully completed import always moves or deletes the
+            # source.  If the file is still at its original incoming location the
+            # previous run didn't finish cleanly — reset and re-process it.
+            elif Path(record.original_path).resolve() == path.resolve():
+                log.info(
+                    "pipeline.reprocess_orphaned",
+                    extra={"path": str(path), "state": record.state.value},
+                )
+                record.state = FileState.INCOMING
+                self._store.upsert(record)
+                # fall through to re-process
+            else:
+                log.info(
+                    "pipeline.skip_duplicate",
+                    extra={"path": str(path), "state": record.state.value},
+                )
+                return record
 
         if record.state == FileState.PENDING_PARTS:
             # Only skip if the staged file is still where the DB says it is.
@@ -718,16 +736,26 @@ class Pipeline:
         record.matched_author = result.author
         record.confidence = result.confidence
 
+        # Whether we created a staging copy (book_path ≠ path).
+        # _mark_imported handles both; _mark_review only moves book_path, so
+        # we must clean up the original source ourselves in the non-import paths.
+        converted = book_path != path
+
         if not result.above_threshold:
             log.info(
                 "pipeline.ebook.low_confidence",
                 extra={"confidence": result.confidence, "title": result.title},
             )
-            return self._mark_review(record, result, book_path)
+            record = self._mark_review(record, result, book_path)
+            if converted:
+                path.unlink(missing_ok=True)  # delete original PDF/MOBI/etc. from incoming/
+            return record
 
         # ── Duplicate check ───────────────────────────────────────────
         dup_record = self._handle_duplicate(record, result, book_path)
         if dup_record is not None:
+            if converted:
+                path.unlink(missing_ok=True)  # same cleanup for duplicate path
             return dup_record
 
         book_id = self._calibre.add_book(book_path)
