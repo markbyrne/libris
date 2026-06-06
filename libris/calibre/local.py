@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from ..config import CalibreConfig
@@ -65,18 +67,37 @@ class LocalCalibre(CalibreBackend):
     def set_cover(self, book_id: int, cover_path: Path) -> None:
         if book_id < 0 or not cover_path.exists():
             return
-        # calibredb has no standalone set_cover subcommand — cover is set via
-        # set_metadata with the --cover flag.
-        cmd = [
-            "calibredb", "set_metadata",
-            str(book_id),
-            "--cover", str(cover_path),
-            "--with-library", str(self._library),
-        ]
-        log.debug("calibre.local.set_cover", extra={"cmd": cmd})
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # calibredb set_metadata has no --cover flag.  The correct approach is
+        # a temporary OPF file that references the cover image by relative path.
+        ext = cover_path.suffix.lstrip(".").lower()
+        mime = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
+        cover_name = f"cover.{ext}"
+
+        with tempfile.TemporaryDirectory(prefix="libris_cover_") as tmp:
+            tmp_path = Path(tmp)
+            shutil.copy2(cover_path, tmp_path / cover_name)
+            opf = tmp_path / "cover.opf"
+            opf.write_text(
+                "<?xml version='1.0' encoding='utf-8'?>\n"
+                "<package xmlns='http://www.idpf.org/2007/opf' version='2.0'>\n"
+                "  <metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>\n"
+                f"    <meta content='cover-image' name='cover'/>\n"
+                "  </metadata>\n"
+                "  <manifest>\n"
+                f"    <item href='{cover_name}' id='cover-image' media-type='{mime}'/>\n"
+                "  </manifest>\n"
+                "</package>\n"
+            )
+            cmd = [
+                "calibredb", "set_metadata",
+                str(book_id),
+                str(opf),
+                "--with-library", str(self._library),
+            ]
+            log.debug("calibre.local.set_cover", extra={"cmd": cmd})
+            result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            log.warning("calibre.local.set_cover_failed", extra={"stderr": result.stderr})
+            log.warning("calibre.local.set_cover_failed: %s", result.stderr.strip())
         else:
             log.info("calibre.local.cover_set", extra={"book_id": book_id})
 

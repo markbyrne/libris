@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from ..config import CalibreConfig
@@ -78,40 +80,66 @@ class DockerCalibre(CalibreBackend):
     def set_cover(self, book_id: int, cover_path: Path) -> None:
         if book_id < 0 or not cover_path.exists():
             return
-        # Cover is a host-side temp file — copy it into the container first,
-        # set it via set_metadata --cover, then remove the container copy.
-        # (calibredb has no standalone set_cover subcommand.)
-        container_cover = f"/tmp/libris_cover_{cover_path.name}"
-        try:
-            cp = subprocess.run(
-                ["docker", "cp", str(cover_path), f"{self._container}:{container_cover}"],
-                capture_output=True, text=True,
-            )
-            if cp.returncode != 0:
-                log.warning(
-                    "calibre.docker.set_cover_failed",
-                    extra={"stage": "docker_cp", "stderr": cp.stderr},
-                )
-                return
+        # calibredb set_metadata has no --cover flag.  Build a temporary OPF
+        # that references the cover by relative path, copy both files into the
+        # container, run set_metadata, then clean up.
+        ext = cover_path.suffix.lstrip(".").lower()
+        mime = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
+        cover_name = f"cover.{ext}"
+        container_tmp = "/tmp/libris_cover_tmp"
 
-            cmd = [
-                "docker", "exec", self._container,
-                "calibredb", "set_metadata",
-                str(book_id),
-                "--cover", container_cover,
-            ]
-            log.debug("calibre.docker.set_cover", extra={"cmd": cmd})
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                log.warning("calibre.docker.set_cover_failed", extra={"stderr": result.stderr})
-            else:
-                log.info("calibre.docker.cover_set", extra={"book_id": book_id})
-        finally:
-            # Always clean up the container-side temp file
-            subprocess.run(
-                ["docker", "exec", self._container, "rm", "-f", container_cover],
-                capture_output=True,
-            )
+        opf_content = (
+            "<?xml version='1.0' encoding='utf-8'?>\n"
+            "<package xmlns='http://www.idpf.org/2007/opf' version='2.0'>\n"
+            "  <metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>\n"
+            f"    <meta content='cover-image' name='cover'/>\n"
+            "  </metadata>\n"
+            "  <manifest>\n"
+            f"    <item href='{cover_name}' id='cover-image' media-type='{mime}'/>\n"
+            "  </manifest>\n"
+            "</package>\n"
+        )
+
+        with tempfile.TemporaryDirectory(prefix="libris_cover_") as tmp:
+            tmp_path = Path(tmp)
+            cover_local = tmp_path / cover_name
+            opf_local = tmp_path / "cover.opf"
+            shutil.copy2(cover_path, cover_local)
+            opf_local.write_text(opf_content)
+
+            try:
+                # Create container temp dir and copy both files in
+                subprocess.run(
+                    ["docker", "exec", self._container, "mkdir", "-p", container_tmp],
+                    capture_output=True,
+                )
+                for local_file in (cover_local, opf_local):
+                    cp = subprocess.run(
+                        ["docker", "cp", str(local_file),
+                         f"{self._container}:{container_tmp}/{local_file.name}"],
+                        capture_output=True, text=True,
+                    )
+                    if cp.returncode != 0:
+                        log.warning("calibre.docker.set_cover_failed: docker cp: %s", cp.stderr.strip())
+                        return
+
+                cmd = [
+                    "docker", "exec", self._container,
+                    "calibredb", "set_metadata",
+                    str(book_id),
+                    f"{container_tmp}/cover.opf",
+                ]
+                log.debug("calibre.docker.set_cover", extra={"cmd": cmd})
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    log.warning("calibre.docker.set_cover_failed: %s", result.stderr.strip())
+                else:
+                    log.info("calibre.docker.cover_set", extra={"book_id": book_id})
+            finally:
+                subprocess.run(
+                    ["docker", "exec", self._container, "rm", "-rf", container_tmp],
+                    capture_output=True,
+                )
 
     def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)
