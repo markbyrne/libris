@@ -5,6 +5,7 @@ Commands:
   libris import-one      — Process a single file (Mac dev / testing)
   libris check-config    — Validate config and print resolved values
   libris list-review     — Show all files in REVIEW state
+  libris show-cover      — Open the matched cover image in the default browser
   libris review-accept   — Force-import a file from review/, bypassing confidence check
   libris reset           — Reset stuck PROCESSING records back to INCOMING
   libris recover         — Move failed files back to review/ for re-processing
@@ -411,7 +412,7 @@ def list_review(config_path: Optional[Path]) -> None:
             if pub_parts:
                 click.echo(f"        Info:     {' · '.join(pub_parts)}")
             if r.matched_cover_url:
-                click.echo(f"        Cover:    {r.matched_cover_url}")
+                click.echo(f"        Cover:    libris show-cover --id {i}")
 
         click.echo(f"        Path:     \"{r.current_path}\"")
         click.echo()
@@ -421,6 +422,7 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo("  Accept all:      libris review-accept --accept-all")
     click.echo("  Accept by path:  libris review-accept \"<path>\"")
     click.echo("  Fix bad match:   libris rematch --id <N>")
+    click.echo("  Preview cover:   libris show-cover --id <N>")
     if failed_records:
         click.echo()
         click.echo(click.style(
@@ -428,6 +430,52 @@ def list_review(config_path: Optional[Path]) -> None:
             fg="yellow",
         ))
     click.echo()
+
+
+@main.command("show-cover")
+@click.option("--id", "review_id", required=True, type=int,
+              help="Review queue position (from 'libris list-review')")
+@_CONFIG_OPTION
+def show_cover(review_id: int, config_path: Optional[Path]) -> None:
+    """Open the cover image for a review queue item in the default browser.
+
+    \b
+      libris show-cover --id 1
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = StateStore(config.paths.state_db)
+    records = store.list_by_state(FileState.REVIEW)
+    store.close()
+
+    if not records:
+        click.echo("\n  No files in review queue.\n")
+        return
+
+    if review_id < 1 or review_id > len(records):
+        _die(
+            f"ID {review_id} out of range — queue has {len(records)} item(s).\n"
+            "  Run 'libris list-review' to see current IDs."
+        )
+
+    record = records[review_id - 1]
+    if not record.matched_cover_url:
+        click.echo(click.style(
+            f"\n  No cover URL stored for [{review_id}] {Path(record.current_path).name}\n"
+            "  Run 'libris rematch --id <N>' to fetch a new match with cover art.\n",
+            fg="yellow",
+        ))
+        return
+
+    import platform
+    url = record.matched_cover_url
+    opener = "open" if platform.system() == "Darwin" else "xdg-open"
+    try:
+        subprocess.run([opener, url], check=True)
+        click.echo(f"\n  Opened cover for: {record.matched_title or Path(record.current_path).name}\n")
+    except Exception as exc:
+        click.echo(click.style(f"\n  Failed to open cover: {exc}\n", fg="red"), err=True)
+        click.echo(f"  URL: {url}\n")
 
 
 @main.command("review-accept")
