@@ -15,6 +15,8 @@ import json
 import logging
 import shutil
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -103,6 +105,9 @@ class Pipeline:
         self._classifier = Classifier()
         self._notifier = Notifier(config.ntfy)
         self._watcher = get_watcher(config.watcher)
+        # Ensures watcher events and periodic scans don't process the same
+        # file concurrently.  One file at a time is fine for a library tool.
+        self._process_lock = threading.Lock()
 
         # Ensure required directories exist
         for d in [
@@ -120,18 +125,37 @@ class Pipeline:
 
     def run(self) -> None:
         """Start the watcher daemon. Blocks indefinitely."""
+        interval = self.config.watcher.scan_interval_hours
         log.info(
             "pipeline.starting",
             extra={
                 "incoming": str(self.config.watcher.incoming_dir),
                 "calibre_mode": self.config.calibre.mode,
                 "threshold": self.config.metadata.confidence_threshold,
+                "scan_interval_hours": interval,
             },
         )
+
+        # Escalate any timed-out pending parts before doing anything else
         self._check_pending_timeouts()
+
+        # Startup scan: pick up files that arrived while the daemon was offline
+        self._scan_incoming(reason="startup")
+
+        # Periodic re-scan in a background daemon thread
+        if interval > 0:
+            t = threading.Thread(
+                target=self._periodic_scan_loop,
+                args=(interval * 3600,),
+                daemon=True,
+                name="libris-scanner",
+            )
+            t.start()
+
         try:
             for event in self._watcher.events():
-                self._handle_event(event)
+                with self._process_lock:
+                    self._handle_event(event)
         except KeyboardInterrupt:
             log.info("pipeline.stopping")
         finally:
@@ -588,6 +612,48 @@ class Pipeline:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _scan_incoming(self, reason: str = "periodic") -> None:
+        """Process every file/directory currently in incoming_dir.
+
+        Safe to call at any time — the dedup check in _handle_event skips
+        anything already in IMPORTED, PROCESSING, or PENDING_PARTS state.
+        Hidden files (dot-prefixed) are ignored.
+        """
+        incoming = self.config.watcher.incoming_dir
+        try:
+            entries = sorted(
+                p for p in incoming.iterdir()
+                if not p.name.startswith(".")
+            )
+        except OSError as exc:
+            log.warning("pipeline.scan_failed: %s", exc)
+            return
+
+        if entries:
+            log.info(
+                "pipeline.scan",
+                extra={"reason": reason, "dir": str(incoming), "count": len(entries)},
+            )
+        else:
+            log.debug(
+                "pipeline.scan",
+                extra={"reason": reason, "dir": str(incoming), "count": 0},
+            )
+
+        for path in entries:
+            with self._process_lock:
+                self._handle_event(FileEvent(path=path, event_type="created"))
+
+    def _periodic_scan_loop(self, interval_seconds: float) -> None:
+        """Background thread: sleep, then re-scan incoming_dir, repeat."""
+        while True:
+            time.sleep(interval_seconds)
+            log.info(
+                "pipeline.periodic_scan",
+                extra={"interval_hours": interval_seconds / 3600},
+            )
+            self._scan_incoming(reason="periodic")
 
     def _get_or_create_record(self, path: Path, media_type: str) -> FileRecord:
         # Primary lookup: exact ID match (path + mtime hash)

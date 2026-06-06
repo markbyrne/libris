@@ -20,6 +20,9 @@ from .exceptions import ConfigError
 class WatcherConfig:
     incoming_dir: Path
     poll_interval_seconds: float = 2.0  # fswatch --latency on macOS
+    # How often to re-scan incoming_dir for files that arrived while the
+    # daemon was offline.  Also runs once at startup.  Set to 0 to disable.
+    scan_interval_hours: float = 1.0
 
 
 @dataclass
@@ -112,6 +115,10 @@ def load_config(config_path: Path) -> Config:
         poll_interval_seconds=float(
             os.environ.get("LIBRIS_WATCHER_POLL_INTERVAL_SECONDS",
                            watcher_raw.get("poll_interval_seconds", 2.0))
+        ),
+        scan_interval_hours=float(
+            os.environ.get("LIBRIS_WATCHER_SCAN_INTERVAL_HOURS",
+                           watcher_raw.get("scan_interval_hours", 1.0))
         ),
     )
 

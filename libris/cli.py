@@ -382,6 +382,9 @@ def check_config(config_path: Optional[Path]) -> None:
         click.echo(f"  Container:      {config.calibre.docker_container}")
     click.echo(f"  Confidence:     {config.metadata.confidence_threshold}")
     click.echo(f"  Mock mode:      {config.metadata.mock_mode}")
+    _scan = config.watcher.scan_interval_hours
+    _scan_str = f"every {_scan:g}h" if _scan > 0 else "disabled"
+    click.echo(f"  Folder scan:    on startup + {_scan_str}")
     click.echo(f"  ntfy topic:     {config.ntfy.topic or '(not set)'}")
     click.echo(f"  ntfy enabled:   {config.ntfy.enabled}")
     click.echo(f"  Log level:      {config.log_level}")
