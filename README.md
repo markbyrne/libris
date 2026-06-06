@@ -18,7 +18,7 @@ Works with local Calibre installations and with [calibre-web](https://github.com
 
 ## Features
 
-- **Automatic import** — drop a file, it appears in Calibre with correct metadata
+- **Automatic import** — drop a file, it appears in Calibre with correct metadata; startup scan catches files that arrived while the daemon was offline
 - **Confidence scoring** — two independent metadata sources cross-checked before import
 - **Full metadata** — title, author, cover art, description, publisher, series, language, ISBN all written to Calibre
 - **Series detection** — extracts series name and index from filenames and API data; writes tags for Apple Books, Prologue, and AudioBookshelf
@@ -92,6 +92,7 @@ cp config.example.yaml config.local.yaml
 ```yaml
 watcher:
   incoming_dir: ~/books/incoming
+  scan_interval_hours: 1.0   # re-scan on startup + every N hours (0 to disable)
 
 paths:
   staging_dir: ~/books/staging
@@ -209,6 +210,21 @@ libris run
 ```
 
 Watches `incoming_dir` continuously and processes files as they arrive. Drop any ebook or audiobook into the directory and it will be imported automatically. Ctrl-C to stop.
+
+On startup, the incoming folder is scanned immediately so any files that arrived while the daemon was offline are processed without waiting. A background thread re-scans the folder periodically (default every hour) as an additional safety net.
+
+Configure the scan interval in your config:
+
+```yaml
+watcher:
+  scan_interval_hours: 1.0   # set to 0 to disable the periodic scan
+```
+
+`libris check-config` shows the resolved scan setting:
+
+```
+  Folder scan:    on startup + every 1h
+```
 
 ---
 
