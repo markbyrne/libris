@@ -37,6 +37,11 @@ def convert_to_m4b(input_path: Path, output_path: Path) -> None:
     """
     cmd = [
         "ffmpeg", "-i", str(input_path),
+        # Explicitly map only audio — input files often carry an embedded cover
+        # art (video stream).  Without -map 0:a, ffmpeg picks libx264 as the
+        # default video encoder for MP4 and fails with "Invalid argument".
+        # Cover art is re-embedded by the tagger after metadata lookup.
+        "-map", "0:a",
         "-c:a", "aac", "-b:a", "128k",
         "-f", "mp4",
         str(output_path),
@@ -84,16 +89,17 @@ def combine_parts(
                 dur_ms = _extract_chapters(part, offset_ms, metadata_file)
                 offset_ms += dur_ms
 
-        # ── Pass 1: concatenate all parts (stream-copy, no re-encode) ───────
-        # Using -c copy avoids encoder initialisation errors (e.g.
-        # "Could not open encoder before EOF") that occur when ffmpeg tries
-        # to transcode already-AAC M4B parts.  Parts are guaranteed to be
-        # M4B/AAC by the time they reach this function — see
-        # _handle_pending_part in pipeline.py which converts non-M4B files
-        # before staging.
+        # ── Pass 1: concatenate all parts (audio-only stream copy) ──────────
+        # -map 0:a: audio streams only.  Input M4B parts often carry embedded
+        # cover art (video streams); without explicit audio mapping, ffmpeg
+        # invokes libx264 for the video and fails with "Invalid argument".
+        # -c copy: stream copy, no re-encode.  Parts are guaranteed M4B/AAC
+        # by _handle_pending_part (which converts before staging).
+        # Cover art is re-embedded by the tagger after metadata lookup.
         _run([
             "ffmpeg", "-f", "concat", "-safe", "0",
             "-i", str(filelist),
+            "-map", "0:a",
             "-c", "copy",
             str(combined), "-y",
         ], f"concatenate {len(parts)} parts")

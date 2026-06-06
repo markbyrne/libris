@@ -115,8 +115,11 @@ class Notifier:
     ) -> None:
         """POST to ntfy.sh. Swallows all exceptions."""
         url = f"{self._config.base_url.rstrip('/')}/{self._config.topic}"
-        headers = {
-            "Title": title,
+        headers: dict = {
+            # httpx encodes string header values as latin-1, which raises for
+            # emoji (e.g. ❌ U+274C).  Encoding as UTF-8 bytes bypasses that
+            # and ntfy's server accepts UTF-8 header values correctly.
+            "Title": title.encode("utf-8"),
             "Priority": priority,
             "Tags": ",".join(tags or []),
         }
