@@ -24,7 +24,7 @@ from .audio import converter as audio_conv
 from .audio import tagger as audio_tag
 from .calibre import get_calibre
 from .calibre.base import CalibreBackend
-from .classifier import Classifier, MediaType
+from .classifier import EBOOK_EXTENSIONS, Classifier, MediaType
 from .cleaner import clean_query, extract_part, strip_part_marker
 from .config import Config
 from .ebook import converter as ebook_conv
@@ -514,16 +514,27 @@ class Pipeline:
         """
         # Only scan direct children — nested subdirectories are not supported.
         audio_files = audio_conv.find_audio_files(folder, recursive=False)
-        if not audio_files:
+        ebook_files = [
+            f for f in sorted(folder.iterdir())
+            if f.is_file() and f.suffix.lstrip(".").lower() in EBOOK_EXTENSIONS
+        ]
+
+        if not audio_files and not ebook_files:
             from .exceptions import ConversionError
-            raise ConversionError(f"No audio files found in {folder}")
+            raise ConversionError(f"No supported files found in {folder}")
 
         log.info(
-            "pipeline.audio.folder_dispatch",
-            extra={"folder": folder.name, "count": len(audio_files)},
+            "pipeline.folder_dispatch",
+            extra={
+                "folder": folder.name,
+                "audio": len(audio_files),
+                "ebooks": len(ebook_files),
+            },
         )
 
         last_record = record
+
+        # ── Audio files ───────────────────────────────────────────────
         for audio_file in audio_files:
             file_record = self._get_or_create_record(audio_file, "audiobook")
 
@@ -550,19 +561,44 @@ class Pipeline:
                 )
                 last_record = self._mark_failed(file_record, exc)
 
+        # ── Ebook files ───────────────────────────────────────────────
+        for ebook_file in ebook_files:
+            file_record = self._get_or_create_record(ebook_file, "ebook")
+
+            if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
+                log.info(
+                    "pipeline.ebook.folder_skip",
+                    extra={"file": ebook_file.name, "state": file_record.state.value},
+                )
+                continue
+
+            file_record.state = FileState.PROCESSING
+            self._store.upsert(file_record)
+
+            try:
+                last_record = self._process_ebook(ebook_file, file_record)
+            except BookPipelineError as exc:
+                log.exception(
+                    "pipeline.ebook.folder_file_failed",
+                    extra={"file": str(ebook_file)},
+                )
+                last_record = self._mark_failed(file_record, exc)
+
         # Each file was moved/converted/deleted by its individual processing
         # step; the directory should now be empty.  Clean it up if possible.
         try:
             folder.rmdir()
-            log.info("pipeline.audio.folder_cleaned", extra={"folder": str(folder)})
+            log.info("pipeline.folder_cleaned", extra={"folder": str(folder)})
         except OSError:
             # Not empty — some files may have failed; leave for the user.
-            log.debug("pipeline.audio.folder_not_empty", extra={"folder": str(folder)})
+            log.debug("pipeline.folder_not_empty", extra={"folder": str(folder)})
 
         # Mark the directory's own record as a processed container so the
         # periodic scan never re-dispatches it.
         record.state = FileState.IMPORTED
-        record.error_msg = f"Directory: dispatched {len(audio_files)} file(s)"
+        record.error_msg = (
+            f"Directory: dispatched {len(audio_files)} audio, {len(ebook_files)} ebook file(s)"
+        )
         self._store.upsert(record)
 
         return last_record

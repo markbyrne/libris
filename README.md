@@ -685,20 +685,23 @@ All ebook formats are converted to your `preferred_ebook_format` (default: epub)
 
 Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of audio files) are also supported — drop the whole directory into `incoming/` and each file is dispatched individually through the normal pipeline.
 
-Files without part markers are imported as standalone books. Files with matching part markers are automatically grouped and combined. A single directory can contain a mix of standalone books and multi-part series:
+Files without part markers are imported as standalone books. Files with matching part markers are automatically grouped and combined. A single directory can contain a mix of standalone books, multi-part series, and ebooks — every file is routed through its correct pipeline:
 
 ```
 incoming/
   Christopher Paolini/
-    Eragon.m4b                         → imported individually ✅
-    Eldest.m4b                         → imported individually ✅
+    Eragon.m4b                         → audiobook import ✅
+    Eldest.m4b                         → audiobook import ✅
     Brisingr (part 1 of 3).m4b  ┐
     Brisingr (part 2 of 3).m4b  ├──── combined → Brisingr.m4b → Calibre ✅
     Brisingr (part 3 of 3).m4b  ┘
     Inheritance (part 1 of 3).m4b  ┐
     Inheritance (part 2 of 3).m4b  ├── combined → Inheritance.m4b → Calibre ✅
     Inheritance (part 3 of 3).m4b  ┘
+    Eragon.epub                        → ebook import ✅
 ```
+
+Ebook files found alongside audiobooks in the same directory are processed through the ebook pipeline (conversion + Calibre import) in the same pass. The directory is removed once all files have been dispatched.
 
 ---
 
