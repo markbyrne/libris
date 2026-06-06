@@ -29,11 +29,12 @@ class Watcher(ABC):
     configured incoming directory. The generator blocks indefinitely until
     stop() is called or the underlying subprocess exits.
 
-    Both implementations skip:
-    - Hidden files (starting with '.')
-    - Directories (pipeline handles those separately)
-    - Files in a directory named 'incoming' (the INCOMING_DIR sentinel that
-      prevents re-processing of combined M4Bs written back to the watch tree)
+    Both implementations yield events only for direct children of incoming_dir:
+    - Hidden entries (starting with '.') are always skipped
+    - A file dropped directly into incoming_dir → yielded as-is
+    - A directory dropped into incoming_dir → yielded; classifier inspects contents
+    - Files nested inside a subdirectory of incoming_dir → skipped; the parent
+      directory event handles them as an audiobook folder
     """
 
     @abstractmethod

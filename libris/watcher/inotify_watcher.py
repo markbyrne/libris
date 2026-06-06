@@ -101,7 +101,7 @@ class InotifyWatcher(Watcher):
             path = Path(fullpath_str)
             event_type = _parse_event_type(event_str)
 
-            if not self._should_process(path):
+            if not self._should_process(path, event_str):
                 continue
 
             self._queue.put(FileEvent(path=path, event_type=event_type))
@@ -109,15 +109,20 @@ class InotifyWatcher(Watcher):
         if self._proc.returncode not in (None, 0, -15):
             log.error("watcher.inotify.process_exited", extra={"rc": self._proc.returncode})
 
-    def _should_process(self, path: Path) -> bool:
+    def _should_process(self, path: Path, event_str: str = "") -> bool:
+        """Filter out paths that should not be processed.
+
+        Only direct children of incoming_dir are processed.  inotify fires
+        ISDIR in the event flags (not the path) for directory events — we
+        allow those for direct children so folders dropped into incoming are
+        handled the same as individual files.
+        """
         if path.name.startswith("."):
             return False
-        # Skip directories — pipeline handles directory events via classifier
-        if "ISDIR" in path.name:
-            return False
-        if "incoming" in {p.name for p in path.parents}:
-            return False
-        return True
+        # Only process direct children of incoming_dir.
+        # Files inside a subdirectory are skipped here — they are handled
+        # when the pipeline processes the parent directory as a whole.
+        return path.parent == self._incoming_dir
 
 
 def _parse_event_type(event_str: str) -> Literal["created", "moved_to"]:

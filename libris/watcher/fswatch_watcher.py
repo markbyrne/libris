@@ -104,24 +104,31 @@ class FswatchWatcher(Watcher):
             path = Path(line.strip())
             if not self._should_process(path):
                 continue
-            _wait_stable(path)
+            if path.is_dir():
+                _wait_stable_dir(path)
+            else:
+                _wait_stable(path)
             self._queue.put(FileEvent(path=path, event_type="created"))
 
         if self._proc.returncode not in (None, 0, -15):  # -15 = SIGTERM
             log.error("watcher.fswatch.process_exited", extra={"rc": self._proc.returncode})
 
     def _should_process(self, path: Path) -> bool:
-        """Filter out paths that should not be processed."""
+        """Filter out paths that should not be processed.
+
+        Only direct children of incoming_dir are processed:
+        - A file dropped directly into incoming_dir → process as a single file
+        - A directory dropped into incoming_dir → process as a folder of parts
+        - Files inside a subdirectory → skip; the parent directory handles them
+        """
         if not path.exists():
-            return False
-        if path.is_dir():
             return False
         if path.name.startswith("."):
             return False
-        # INCOMING_DIR sentinel — skip files in any dir named 'incoming'
-        if "incoming" in {p.name for p in path.parents}:
-            return False
-        return True
+        # Only process direct children of incoming_dir.
+        # This also filters out events for individual files inside a
+        # subdirectory that is itself being processed as an audiobook folder.
+        return path.parent == self._incoming_dir
 
 
 def _wait_stable(path: Path, interval: float = _STABILIZE_INTERVAL) -> None:
@@ -139,3 +146,31 @@ def _wait_stable(path: Path, interval: float = _STABILIZE_INTERVAL) -> None:
         time.sleep(interval)
         waited += interval
     log.warning("watcher.stabilize_timeout", extra={"file": str(path)})
+
+
+def _wait_stable_dir(path: Path, interval: float = 1.0) -> None:
+    """Block until the total recursive byte count of a directory stops changing.
+
+    Two consecutive equal measurements with no OSError are required before
+    returning.  This handles the case where a directory is copied into
+    incoming_dir file-by-file (e.g. a slow download manager writing files
+    as they complete).  Directories moved in atomically (mv/rename) will
+    typically be stable on the first check.
+    """
+    prev_size = -1
+    waited = 0.0
+    while waited < _STABILIZE_MAX_WAIT:
+        try:
+            curr_size = sum(
+                f.stat().st_size
+                for f in path.rglob("*")
+                if f.is_file()
+            )
+        except OSError:
+            return   # directory disappeared or permission error
+        if curr_size == prev_size:
+            return   # stable
+        prev_size = curr_size
+        time.sleep(interval)
+        waited += interval
+    log.warning("watcher.dir_stabilize_timeout", extra={"dir": str(path)})

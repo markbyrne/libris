@@ -561,6 +561,16 @@ class Pipeline:
 
     def _process_ebook(self, path: Path, record: FileRecord) -> FileRecord:
         """Convert (if needed) and import an ebook to Calibre."""
+        if path.is_dir():
+            # Ebook directories are not supported — we don't know which file
+            # to use or how to merge them.  Fail clearly rather than crashing
+            # inside ebook-convert.
+            from .exceptions import BookPipelineError
+            raise BookPipelineError(
+                f"Cannot process an ebook directory: {path.name}. "
+                "Place individual ebook files in incoming/ directly."
+            )
+
         ext = path.suffix.lstrip(".").lower()
 
         if ext == "epub":

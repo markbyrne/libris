@@ -580,7 +580,15 @@ Duplicate candidates (same book, different editions) are deduplicated before sco
 | Ebook | epub, mobi, pdf, azw, azw3, cbz, cbr, djvu |
 | Audiobook | mp3, m4a, m4b, flac, ogg, aac, opus, wav |
 
-Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of files) are also supported.
+Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of audio files) are also supported — drop the whole directory into `incoming/` and it will be combined and imported as a single M4B.
+
+```
+incoming/
+  Brisingr/          ← directory dropped in
+    01 - Chapter 1.mp3
+    02 - Chapter 2.mp3
+    ...              → combined → staging/Brisingr.m4b → Calibre ✅
+```
 
 ---
 
