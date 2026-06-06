@@ -155,7 +155,10 @@ def _render_review_record(i: int, r) -> None:
     if r.error_msg and r.error_msg.startswith("Duplicate:"):
         click.echo(click.style(f"        ⚠  {r.error_msg}", fg="yellow"))
         click.echo(click.style(
-            f"           To delete: libris review-discard --id {i}", dim=True
+            f"           To import anyway: libris review-accept --id {i} --overwrite", dim=True
+        ))
+        click.echo(click.style(
+            f"           To delete:        libris review-discard --id {i}", dim=True
         ))
 
     if not _has_match(r):
@@ -532,8 +535,12 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
     _render_review_record(review_id, record)
     click.echo()
     click.echo(_hr())
-    click.echo(f"  Accept:      libris review-accept --id {review_id}")
-    click.echo(f"  Fix match:   libris rematch --id {review_id}")
+    is_dup = record.error_msg and record.error_msg.startswith("Duplicate:")
+    if is_dup:
+        click.echo(f"  Accept (overwrite):  libris review-accept --id {review_id} --overwrite")
+    else:
+        click.echo(f"  Accept:              libris review-accept --id {review_id}")
+    click.echo(f"  Fix match:           libris rematch --id {review_id}")
     click.echo()
 
 
@@ -638,11 +645,14 @@ def review_discard(
               help="Accept by review queue position (from 'libris list-review')")
 @click.option("--accept-all", "accept_all", is_flag=True, default=False,
               help="Accept every file currently in the review queue")
+@click.option("--overwrite", "overwrite", is_flag=True, default=False,
+              help="Import even if the book is already in the Calibre library (bypass duplicate check)")
 @_CONFIG_OPTION
 def review_accept(
     file_path: Optional[Path],
     review_id: Optional[int],
     accept_all: bool,
+    overwrite: bool,
     config_path: Optional[Path],
 ) -> None:
     """Force-import file(s) from review/, bypassing the confidence threshold.
@@ -653,6 +663,11 @@ def review_accept(
       libris review-accept --id 1
       libris review-accept --accept-all
       libris review-accept "/path/with spaces/file.epub"
+
+    For items flagged as duplicates, add --overwrite to import anyway:
+
+    \b
+      libris review-accept --id 1 --overwrite
     """
     path = _resolve_config(config_path)
     config = load_config(path)
@@ -721,7 +736,28 @@ def review_accept(
             any_failed = True
             continue
 
+        # Block duplicates unless --overwrite is explicitly given
+        is_duplicate = (
+            cached_record
+            and cached_record.error_msg
+            and cached_record.error_msg.startswith("Duplicate:")
+        )
+        if is_duplicate and not overwrite:
+            id_hint = f"--id {queue_pos}" if queue_pos else ""
+            click.echo(f"  ⚠   {target.name}")
+            click.echo(click.style(
+                f"       Already in Calibre — add --overwrite to import anyway:\n"
+                f"       libris review-accept {id_hint} --overwrite",
+                fg="yellow",
+            ))
+            click.echo()
+            any_failed = True
+            continue
+
         pipeline = Pipeline(config)
+        # Ensure the pipeline won't re-flag this as a duplicate mid-import
+        if overwrite:
+            pipeline.config.metadata.duplicate_action = "import"
 
         if cached_record and cached_record.matched_metadata_json:
             # Fast path: use the metadata we already have — no API call

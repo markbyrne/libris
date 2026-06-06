@@ -235,7 +235,7 @@ libris list-review
 ```
 
 ```
-  2 file(s) in review
+  3 file(s) in review
   ──────────────────────────────────────────────────
 
   [1]  Caliban and the Witch.epub
@@ -245,7 +245,15 @@ libris list-review
         Cover:    libris show-cover --id 1
         Path:     "/Users/you/books/review/Caliban and the Witch.epub"
 
-  [2]  unknown-audiobook.m4b
+  [2]  Brisingr.m4b
+        ⚠  Duplicate: already in Calibre (IDs: 7)
+           To import anyway: libris review-accept --id 2 --overwrite
+           To delete:        libris review-discard --id 2
+        Matched:  Brisingr  by Christopher Paolini
+        Score:    0.94
+        Path:     "/Users/you/books/review/Brisingr.m4b"
+
+  [3]  unknown-audiobook.m4b
         [!] No match found
         Path:     "/Users/you/books/review/unknown-audiobook.m4b"
 
@@ -255,6 +263,8 @@ libris list-review
   Accept by path:  libris review-accept "<path>"
   Fix bad match:   libris rematch --id <N>
   Preview cover:   libris show-cover --id <N>
+  Discard:         libris review-discard --id <N>
+  Discard dupes:   libris review-discard --duplicates
 ```
 
 Items showing `[!] No match found` could not be matched by either API. Run `libris rematch --id <N>` to search manually. `review-accept` is blocked until a match is found.
@@ -301,6 +311,29 @@ libris review-accept --accept-all
 
 # By path (quote paths with spaces)
 libris review-accept "/books/review/Caliban and the Witch.epub"
+```
+
+#### Accepting duplicates
+
+If the file was flagged as a duplicate of an existing Calibre book, `review-accept` blocks by default and shows you the exact command to use:
+
+```
+  ⚠   Brisingr.m4b
+       Already in Calibre — add --overwrite to import anyway:
+       libris review-accept --id 1 --overwrite
+```
+
+Use `--overwrite` when you intentionally want to replace or supplement an existing entry:
+
+```bash
+libris review-accept --id 1 --overwrite
+```
+
+To delete the duplicate instead, use `review-discard`:
+
+```bash
+libris review-discard --id 1          # delete this one
+libris review-discard --duplicates    # delete all duplicate-flagged items
 ```
 
 ---
