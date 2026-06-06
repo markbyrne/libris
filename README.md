@@ -746,7 +746,18 @@ Each file is scored against candidates from Google Books and OpenLibrary:
 | Author match | 20% |
 | Publication year | 10% |
 
-If both sources independently agree on the same book (titles > 85% similar, shared author surname), a cross-source agreement bonus of +0.08 is applied. Files scoring below `confidence_threshold` (default `0.75`) go to `review/` instead of being imported.
+If both sources independently agree on the same book (titles > 85% similar, shared author surname), a cross-source agreement bonus of **+0.12** is applied. Files scoring below `confidence_threshold` (default `0.75`) go to `review/` instead of being imported.
+
+### Strong-match floor
+
+Without an ISBN in the filename, the maximum achievable base score is only 0.60 (title + author + year all perfect) or 0.72 with the agreement bonus — both below the default 0.75 threshold. Libris applies a confidence floor when title and author are both clearly correct, so an obvious match doesn't get sent to review just because the filename lacks an ISBN:
+
+| Tier | Title score | Author score | Minimum confidence |
+|------|-------------|--------------|-------------------|
+| Strong | ≥ 90% (≤ a few chars off) | Exact surname | 0.82 |
+| Good | ≥ 85% | First-name / token match | 0.76 |
+
+Floors only raise confidence — they never lower an already-high score. When applied, a `strong_match_floor` entry appears in the score breakdown in the `rematch` UI.
 
 Duplicate candidates (same book, different editions) are deduplicated before scoring — the highest-confidence edition is kept.
 

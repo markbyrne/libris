@@ -6,9 +6,21 @@ Signal weights (sum to 1.0):
   Author match  0.20  — surname token overlap; partial credit for partial matches
   Year match    0.10  — tiebreaker; many files omit year entirely
 
-Cross-source agreement bonus +0.08 (capped at 1.0): applied when Google Books
+Cross-source agreement bonus +0.12 (capped at 1.0): applied when Google Books
 and OpenLibrary independently produce best candidates whose titles agree > 0.85
 AND share an author surname.
+
+Strong-match floor: without an ISBN in the filename, the maximum achievable
+base score is only 0.60 (title+author+year perfect) or 0.68 with the
+agreement bonus — below the default 0.75 threshold.  When title AND author
+both score clearly correct we apply a minimum confidence floor so the file
+is not needlessly sent to review:
+
+  Strong (title ≥ 90% + exact surname):   floor 0.82
+  Good   (title ≥ 85% + author present):  floor 0.76
+
+Floors only raise confidence, never lower it, and are recorded in
+score_breakdown["strong_match_floor"] for transparency in the rematch UI.
 """
 
 from __future__ import annotations
@@ -28,8 +40,17 @@ W_TITLE  = 0.30
 W_AUTHOR = 0.20
 W_YEAR   = 0.10
 
-AGREEMENT_BONUS = 0.08
-AGREEMENT_TITLE_THRESHOLD = 85.0   # rapidfuzz score (0–100)
+AGREEMENT_BONUS = 0.12            # raised from 0.08 — two APIs agreeing is strong
+AGREEMENT_TITLE_THRESHOLD = 85.0  # rapidfuzz score (0–100)
+
+# ── Strong-match floor ────────────────────────────────────────────────────
+# Without ISBN, max base score is 0.60 (perfect title+author+year).
+# These floors guarantee a passing confidence when title+author are both clear.
+STRONG_TITLE_THRESHOLD = 90   # raw token_sort_ratio; ~2 chars off in a 20-char title
+GOOD_TITLE_THRESHOLD   = 85
+
+STRONG_MATCH_FLOOR = 0.82     # title ≥ 90 AND exact author surname match
+GOOD_MATCH_FLOOR   = 0.76     # title ≥ 85 AND author token present
 
 
 # ---------------------------------------------------------------------------
@@ -50,12 +71,30 @@ def score_candidate(query: SearchQuery, candidate: BookCandidate) -> ScoredCandi
     breakdown["title"] = (raw_title_score / 100.0) * W_TITLE
 
     # ── Author ────────────────────────────────────────────────────────────
-    breakdown["author"] = _author_score(query.author_hint, candidate.authors) * W_AUTHOR
+    raw_author_score = _author_score(query.author_hint, candidate.authors)
+    breakdown["author"] = raw_author_score * W_AUTHOR
 
     # ── Year ──────────────────────────────────────────────────────────────
     breakdown["year"] = _year_score(query.year_hint, candidate.published_year) * W_YEAR
 
     confidence = min(1.0, sum(breakdown.values()))
+
+    # ── Strong-match floor ────────────────────────────────────────────────
+    # Without ISBN the base score caps at 0.60–0.68, below the default 0.75
+    # threshold.  When both title and author signal clearly correct, apply a
+    # minimum floor rather than sending an obvious match to review.
+    # Floors only raise — they never reduce an already-high score.
+    if raw_title_score >= STRONG_TITLE_THRESHOLD and raw_author_score >= 1.0:
+        floor = STRONG_MATCH_FLOOR
+    elif raw_title_score >= GOOD_TITLE_THRESHOLD and raw_author_score >= 0.7:
+        floor = GOOD_MATCH_FLOOR
+    else:
+        floor = 0.0
+
+    if floor and confidence < floor:
+        breakdown["strong_match_floor"] = round(floor - confidence, 4)
+        confidence = floor
+
     return ScoredCandidate(
         candidate=candidate,
         confidence=confidence,

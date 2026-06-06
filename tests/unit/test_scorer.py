@@ -4,6 +4,9 @@ import pytest
 
 from libris.metadata.base import BookCandidate, SearchQuery
 from libris.metadata.scorer import (
+    AGREEMENT_BONUS,
+    GOOD_MATCH_FLOOR,
+    STRONG_MATCH_FLOOR,
     _apply_agreement_bonus,
     pick_best,
     score_candidate,
@@ -157,3 +160,123 @@ class TestAgreementBonus:
         # Winner should be Project Hail Mary (higher score); no bonus
         assert "agreement_bonus" not in winner.score_breakdown or \
                winner.score_breakdown.get("agreement_bonus", 0) == 0
+
+    def test_agreement_bonus_value(self):
+        """Bonus applied should equal the AGREEMENT_BONUS constant (currently 0.12)."""
+        google_c = BookCandidate(
+            title="Blood River",
+            authors=["Tim Butcher"],
+            source="google_books",
+        )
+        ol_c = BookCandidate(
+            title="Blood River",
+            authors=["Tim Butcher"],
+            source="open_library",
+        )
+        query = SearchQuery(clean_title="Blood River", author_hint="Tim Butcher")
+        g_scored = score_candidate(query, google_c)
+        o_scored = score_candidate(query, ol_c)
+
+        winner = _apply_agreement_bonus(g_scored, o_scored)
+        assert winner is not None
+        assert "agreement_bonus" in winner.score_breakdown
+        assert winner.score_breakdown["agreement_bonus"] == pytest.approx(AGREEMENT_BONUS)
+
+
+# ---------------------------------------------------------------------------
+# Strong-match floor
+# ---------------------------------------------------------------------------
+
+class TestStrongMatchFloor:
+    """Floors guarantee passing confidence when title+author are clearly correct.
+
+    Without ISBN the base score caps at 0.60; the floor mechanism prevents
+    obviously correct matches from being sent to review.
+    """
+
+    # ── Common candidates ────────────────────────────────────────────────────
+    _BLOOD_RIVER = BookCandidate(
+        title="Blood River",
+        authors=["Tim Butcher"],
+        published_year=2007,
+        source="google_books",
+    )
+    _ROTHFUSS = BookCandidate(
+        title="The Name of the Wind",
+        authors=["Patrick Rothfuss"],
+        published_year=2007,
+        source="google_books",
+    )
+
+    def test_strong_floor_applied_exact_title_and_surname(self):
+        """Title 100% + exact surname → STRONG_MATCH_FLOOR (0.82)."""
+        query = SearchQuery(clean_title="Blood River", author_hint="Tim Butcher")
+        scored = score_candidate(query, self._BLOOD_RIVER)
+
+        assert scored.confidence >= STRONG_MATCH_FLOOR
+        assert "strong_match_floor" in scored.score_breakdown
+
+    def test_strong_floor_confidence_is_exactly_floor_when_base_below(self):
+        """When base is below the floor, confidence is pinned to STRONG_MATCH_FLOOR."""
+        query = SearchQuery(clean_title="Blood River", author_hint="Tim Butcher")
+        scored = score_candidate(query, self._BLOOD_RIVER)
+        # Base (no ISBN, no year hint): 0.30 + 0.20 + 0.05 = 0.55 → floor lifts to 0.82
+        assert scored.confidence == pytest.approx(STRONG_MATCH_FLOOR)
+
+    def test_good_floor_applied_token_author_match(self):
+        """Title 100% + author token (first-name only) → GOOD_MATCH_FLOOR (0.76)."""
+        # author_hint="Patrick" → matches token in "Patrick Rothfuss" but NOT surname
+        query = SearchQuery(clean_title="The Name of the Wind", author_hint="Patrick")
+        scored = score_candidate(query, self._ROTHFUSS)
+
+        assert scored.confidence >= GOOD_MATCH_FLOOR
+        assert "strong_match_floor" in scored.score_breakdown
+
+    def test_floor_not_applied_without_author_hint(self):
+        """No author hint → neutral author score (0.5) → floor threshold not met."""
+        query = SearchQuery(clean_title="Blood River")   # no author_hint
+        scored = score_candidate(query, self._BLOOD_RIVER)
+
+        # raw_author_score = 0.5 (neutral) < 0.7 — neither tier applies
+        assert "strong_match_floor" not in scored.score_breakdown
+
+    def test_floor_not_applied_wrong_author(self):
+        """Good title but completely wrong author → no floor."""
+        query = SearchQuery(clean_title="Blood River", author_hint="Tolkien")
+        scored = score_candidate(query, self._BLOOD_RIVER)
+
+        assert "strong_match_floor" not in scored.score_breakdown
+
+    def test_floor_not_applied_when_base_already_above(self):
+        """ISBN present → base already high; floor adds nothing (no key in breakdown)."""
+        # ISBN match pushes base well above any floor
+        query = SearchQuery(
+            clean_title="Project Hail Mary",
+            author_hint="Andy Weir",
+            isbn="9780593135204",
+        )
+        scored = score_candidate(query, PROJECT_HAIL_MARY)
+
+        # Floor should not appear because confidence >= floor already
+        assert "strong_match_floor" not in scored.score_breakdown
+
+    def test_floor_never_lowers_score(self):
+        """Floor can only raise — it should never reduce an already-passing score."""
+        query = SearchQuery(
+            clean_title="Project Hail Mary",
+            author_hint="Andy Weir",
+            isbn="9780593135204",
+            year_hint=2021,
+        )
+        scored_with_isbn = score_candidate(query, PROJECT_HAIL_MARY)
+        query_no_isbn = SearchQuery(
+            clean_title="Project Hail Mary",
+            author_hint="Andy Weir",
+            year_hint=2021,
+        )
+        scored_no_isbn = score_candidate(query_no_isbn, PROJECT_HAIL_MARY)
+
+        # Both should be valid; no-ISBN score gets lifted by floor
+        assert scored_no_isbn.confidence >= STRONG_MATCH_FLOOR
+        # ISBN score should always be at least as high as (or higher than) no-ISBN score
+        assert scored_with_isbn.confidence >= scored_no_isbn.confidence
