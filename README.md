@@ -70,6 +70,67 @@ pip install -e ".[dev]"
 
 ---
 
+## Quick Start
+
+**1. Create your config**
+
+```bash
+mkdir -p ~/.config/libris
+cp /path/to/libris/config.example.yaml ~/.config/libris/config.yaml
+```
+
+Open `~/.config/libris/config.yaml` and set the paths for your setup:
+
+```yaml
+watcher:
+  incoming_dir: ~/books/incoming      # drop files here to import them
+
+paths:
+  staging_dir: ~/books/staging
+  review_dir:  ~/books/review
+  failed_dir:  ~/books/failed
+  state_db:    ~/books/libris.db
+
+calibre:
+  mode: local
+  library_path: ~/Calibre Library     # your Calibre library folder
+
+ntfy:
+  topic: my-libris-alerts             # optional — for push notifications
+```
+
+**2. Point your shell at the config**
+
+Add this line to your `~/.zshrc` (or `~/.bashrc`) so `libris` commands work from any directory:
+
+```bash
+export LIBRIS_CONFIG=~/.config/libris/config.yaml
+```
+
+Then reload your shell:
+
+```bash
+source ~/.zshrc   # or source ~/.bashrc
+```
+
+**3. Verify the setup**
+
+```bash
+libris check-config
+```
+
+This validates the config, prints all resolved settings, and sends a test ntfy notification if configured.
+
+**4. Start the daemon**
+
+```bash
+libris run
+```
+
+Drop any ebook or audiobook into `incoming_dir` and it will be imported automatically.
+
+---
+
 ## Configuration
 
 ### Config file discovery
@@ -77,31 +138,19 @@ pip install -e ".[dev]"
 Libris resolves the config file in this order — the first match wins:
 
 1. `--config <path>` CLI flag
-2. `LIBRIS_CONFIG` environment variable ← **recommended for permanent installs**
+2. `LIBRIS_CONFIG` environment variable ← **recommended; set in your shell profile**
 3. `config.local.yaml` in the current directory
 4. `config.yaml` in the current directory
 5. `~/.config/libris/config.yaml`
 
-#### Permanent setup (recommended)
-
-Add to your `~/.zshrc` or `~/.bashrc` so every `libris` command works from any directory:
-
-```bash
-export LIBRIS_CONFIG=~/.config/libris/config.yaml
-```
-
-Then create the config once:
-
-```bash
-mkdir -p ~/.config/libris
-cp /path/to/libris/config.example.yaml ~/.config/libris/config.yaml
-# Edit ~/.config/libris/config.yaml with your paths
-```
+If no config is found, the error message lists all locations tried and shows how to fix it.
 
 #### Per-project override
 
+If you prefer to keep the config alongside the repo (git-ignored):
+
 ```bash
-cp config.example.yaml config.local.yaml   # git-ignored
+cp config.example.yaml config.local.yaml
 # Edit config.local.yaml — only used when running from this directory
 ```
 
