@@ -297,6 +297,20 @@ class StateStore:
             sorted(groups.items(), key=lambda kv: min(r.created_at for r in kv[1]))
         )
 
+    def delete_by_calibre_id(self, calibre_book_id: int) -> int:
+        """Delete all records whose calibre_book_id matches *calibre_book_id*.
+
+        Used by clean-library after a Calibre book is removed, so stale DB
+        entries don't block re-imports of the same file.
+
+        Returns the number of rows deleted.
+        """
+        cur = self._conn.execute(
+            "DELETE FROM files WHERE calibre_book_id=?",
+            (calibre_book_id,),
+        )
+        return cur.rowcount
+
     def cleanup_stale_review(self, current_path: str, exclude_id: str = "") -> None:
         """After a force-accept import, mark any old REVIEW record at *current_path*
         as IMPORTED so it no longer appears in list-review output.

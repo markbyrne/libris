@@ -109,3 +109,17 @@ class CalibreBackend(ABC):
         Returns an empty set on any error so callers can treat it as "unknown".
         """
         ...
+
+    @abstractmethod
+    def list_books(self) -> list[dict]:
+        """Return all books in the library as a list of dicts.
+
+        Each dict has:
+            id      (int)        — Calibre book ID
+            title   (str)        — book title
+            authors (list[str])  — author name(s)
+            formats (list[str])  — lowercase format extensions, e.g. ["epub"]
+
+        Returns an empty list on any error.
+        """
+        ...

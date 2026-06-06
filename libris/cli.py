@@ -1690,6 +1690,197 @@ def reset(config_path: Optional[Path]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# clean-library
+# ---------------------------------------------------------------------------
+
+@main.command("clean-library")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what would happen without making any changes")
+@_CONFIG_OPTION
+def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
+    """Deduplicate Calibre and re-queue Unknown-metadata books.
+
+    \b
+    Two passes over the library:
+
+    1.  Dedup — groups books by normalised title + author surname; for each
+        group with more than one entry, merges all formats into the lowest-ID
+        book and removes the extras.
+
+    2.  Unknown — finds books whose title or every author is 'Unknown';
+        exports the file(s), drops them into incoming/ for the normal
+        import pipeline to re-match, and removes the Calibre entry.
+
+    \b
+    Run without flags first to preview what will change:
+
+        libris clean-library --dry-run
+
+    Then apply:
+
+        libris clean-library
+        libris run              # re-imports anything moved to incoming/
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+
+    calibre = get_calibre(config.calibre)
+    store = StateStore(config.paths.state_db)
+    incoming = config.watcher.incoming_dir
+
+    books = calibre.list_books()
+    if not books:
+        click.echo("\n  Calibre library is empty.\n")
+        store.close()
+        return
+
+    tag = click.style("[dry-run]", fg="cyan") + " " if dry_run else ""
+
+    click.echo(f"\n  {len(books)} book(s) in Calibre library\n")
+
+    # ── Pass 1: Dedup ────────────────────────────────────────────────────────
+    click.echo(click.style("  ── Pass 1: Dedup ──", bold=True))
+
+    import unicodedata
+
+    def _norm(s: str) -> str:
+        """Lower-case, strip accents, collapse whitespace — for grouping."""
+        nfkd = unicodedata.normalize("NFKD", s)
+        ascii_s = "".join(c for c in nfkd if not unicodedata.combining(c))
+        return " ".join(ascii_s.lower().split())
+
+    # Group by (normalised-title, normalised-first-author-surname)
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for b in books:
+        title_key = _norm(b["title"])
+        if b["authors"]:
+            surname = _norm(b["authors"][0].split()[-1])
+        else:
+            surname = ""
+        groups[(title_key, surname)].append(b)
+
+    dedup_removed = 0
+    for key, group in sorted(groups.items()):
+        if len(group) < 2:
+            continue
+        # Sort by ID: keep the lowest (earliest import)
+        group_sorted = sorted(group, key=lambda b: b["id"])
+        primary = group_sorted[0]
+        extras = group_sorted[1:]
+
+        # Collect formats present only in extras
+        primary_fmts = set(primary["formats"])
+        for extra in extras:
+            for fmt in extra["formats"]:
+                if fmt not in primary_fmts:
+                    click.echo(
+                        f"  {tag}  merge format {fmt.upper()} from book "
+                        f"{extra['id']} → book {primary['id']} "
+                        f"({primary['title']!r})"
+                    )
+                    if not dry_run:
+                        # Export extra's format and add to primary
+                        try:
+                            tmp = Path(tempfile.mkdtemp(prefix="libris_dedup_"))
+                            exported = calibre.export_book(extra["id"], tmp)
+                            for ef in exported:
+                                if ef.suffix.lstrip(".").lower() == fmt:
+                                    calibre.add_format(primary["id"], ef)
+                            shutil.rmtree(tmp, ignore_errors=True)
+                            primary_fmts.add(fmt)
+                        except Exception as exc:
+                            click.echo(
+                                click.style(f"       ⚠ format merge failed: {exc}", fg="yellow"),
+                                err=True,
+                            )
+                            continue
+
+        for extra in extras:
+            click.echo(
+                f"  {tag}  remove duplicate book {extra['id']} "
+                f"({extra['title']!r} by {', '.join(extra['authors'])}) "
+                f"[{', '.join(extra['formats']).upper() or 'no formats'}]"
+            )
+            if not dry_run:
+                try:
+                    calibre.remove_book(extra["id"])
+                    # Clean up any DB record pointing at this calibre_book_id
+                    store.delete_by_calibre_id(extra["id"])
+                    dedup_removed += 1
+                except Exception as exc:
+                    click.echo(
+                        click.style(f"       ⚠ remove failed: {exc}", fg="yellow"),
+                        err=True,
+                    )
+
+    if dedup_removed == 0 and not dry_run:
+        click.echo("  No duplicates found.")
+    elif dry_run:
+        dup_count = sum(len(g) - 1 for g in groups.values() if len(g) > 1)
+        click.echo(f"  Would remove {dup_count} duplicate book(s).")
+
+    # ── Pass 2: Unknown metadata ─────────────────────────────────────────────
+    click.echo()
+    click.echo(click.style("  ── Pass 2: Unknown metadata ──", bold=True))
+
+    unknown_books = [
+        b for b in books
+        if b["title"].strip().lower() in ("unknown", "")
+        or all(a.strip().lower() in ("unknown", "") for a in b["authors"])
+    ]
+
+    if not unknown_books:
+        click.echo("  No Unknown-metadata books found.")
+    else:
+        incoming.mkdir(parents=True, exist_ok=True)
+        for b in unknown_books:
+            label = f"book {b['id']} ({', '.join(b['formats']).upper() or 'no formats'})"
+            click.echo(f"  {tag}  re-queue {label}")
+            if not dry_run:
+                try:
+                    tmp = Path(tempfile.mkdtemp(prefix="libris_unknown_"))
+                    exported = calibre.export_book(b["id"], tmp)
+                    if not exported:
+                        click.echo(
+                            click.style(f"       ⚠ export returned no files — skipping", fg="yellow"),
+                            err=True,
+                        )
+                        shutil.rmtree(tmp, ignore_errors=True)
+                        continue
+                    for ef in exported:
+                        dest = incoming / ef.name
+                        # Avoid clobbering if same filename already there
+                        if dest.exists():
+                            stem, suf = ef.stem, ef.suffix
+                            dest = incoming / f"{stem}_unknown{b['id']}{suf}"
+                        shutil.move(str(ef), dest)
+                        click.echo(f"       → incoming/{dest.name}")
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    calibre.remove_book(b["id"])
+                    store.delete_by_calibre_id(b["id"])
+                except Exception as exc:
+                    click.echo(
+                        click.style(f"       ⚠ failed: {exc}", fg="yellow"),
+                        err=True,
+                    )
+
+    click.echo()
+    if not dry_run and unknown_books:
+        click.echo(
+            click.style(
+                f"  {len(unknown_books)} book(s) moved to incoming/. "
+                "Run 'libris run' to re-import them.",
+                fg="green",
+            )
+        )
+    click.echo()
+
+    store.close()
+
+
+# ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
 

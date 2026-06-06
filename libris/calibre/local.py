@@ -29,11 +29,18 @@ class LocalCalibre(CalibreBackend):
         self._library = config.library_path
 
     def add_book(self, file_path: Path) -> int:
+        # Do NOT pass --automerge ignore.  When calibredb's automerge detects
+        # a "similar" book and ignores the add, it returns rc=0 with no
+        # "Added book ids: N" in stdout.  The fallback integer-extraction in
+        # _parse_book_id then picks up stray numbers from DeDRM plugin output
+        # (e.g. "0.2 seconds" → 2) and returns the wrong book ID, causing
+        # set_metadata/set_cover to corrupt an unrelated existing book.
+        # Libris handles duplicate detection itself via _handle_duplicate before
+        # calling add_book, so calibredb should always add a fresh record here.
         cmd = [
             "calibredb", "add",
             str(file_path),
             "--with-library", str(self._library),
-            "--automerge", "ignore",
         ]
         log.debug("calibre.local.add", extra={"cmd": cmd})
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -47,8 +54,20 @@ class LocalCalibre(CalibreBackend):
                 f"calibredb add failed (rc={result.returncode}): {result.stderr.strip()}"
             )
 
+        # Defensive: if calibredb still declined to add (e.g. plugin or library
+        # issue), the stderr will say "were not added".  Treat as a hard error.
+        if "were not added" in result.stderr or "was not added" in result.stderr:
+            raise CalibreImportError(
+                f"calibredb refused to add {file_path.name}: {result.stderr.strip()}"
+            )
+
         log.debug("calibre.local.add_stdout", extra={"stdout": result.stdout.strip()})
         book_id = _parse_book_id(result.stdout)
+        if book_id < 0:
+            raise CalibreImportError(
+                f"calibredb add returned no book ID for {file_path.name}. "
+                f"stdout: {result.stdout.strip()!r}"
+            )
         log.info("calibre.local.added", extra={"file": str(file_path), "book_id": book_id})
         return book_id
 
@@ -77,6 +96,9 @@ class LocalCalibre(CalibreBackend):
             tmp_path = Path(tmp)
             shutil.copy2(cover_path, tmp_path / cover_name)
             opf = tmp_path / "cover.opf"
+            # The <guide> element with type='cover' is required for calibredb
+            # to actually import the image as the book's cover — the manifest
+            # entry alone is not sufficient.
             opf.write_text(
                 "<?xml version='1.0' encoding='utf-8'?>\n"
                 "<package xmlns='http://www.idpf.org/2007/opf' version='2.0'>\n"
@@ -86,6 +108,9 @@ class LocalCalibre(CalibreBackend):
                 "  <manifest>\n"
                 f"    <item href='{cover_name}' id='cover-image' media-type='{mime}'/>\n"
                 "  </manifest>\n"
+                "  <guide>\n"
+                f"    <reference href='{cover_name}' type='cover' title='Cover'/>\n"
+                "  </guide>\n"
                 "</package>\n"
             )
             cmd = [
@@ -178,6 +203,25 @@ class LocalCalibre(CalibreBackend):
         result = subprocess.run(cmd, capture_output=True, text=True)
         return _parse_formats(result.stdout)
 
+    def list_books(self) -> list[dict]:
+        import json as _json
+        cmd = [
+            "calibredb", "list",
+            "--for-machine",
+            "--fields", "id,title,authors,formats",
+            "--with-library", str(self._library),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.local.list_books_failed", extra={"stderr": result.stderr})
+            return []
+        try:
+            raw = _json.loads(result.stdout)
+        except _json.JSONDecodeError:
+            log.warning("calibre.local.list_books_parse_error", extra={"stdout": result.stdout[:200]})
+            return []
+        return [_normalise_book_entry(b) for b in raw]
+
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         cmd = ["ebook-convert", str(input_path), str(output_path)]
         log.debug("calibre.local.convert", extra={"cmd": cmd})
@@ -221,6 +265,41 @@ def _metadata_flags(result: MetadataResult) -> list[list[str]]:
     return flags
 
 
+def _normalise_book_entry(raw: dict) -> dict:
+    """Normalise a single calibredb --for-machine list entry.
+
+    calibredb varies across versions in how it represents authors and formats:
+      - authors: str "Andy Weir" | list ["Andy Weir"]
+      - formats: str "/path/book.epub" | list ["/path/book.epub"]
+    Returns a consistent dict with id (int), title (str), authors (list[str]),
+    formats (list[str] of lowercase extensions, no leading dot).
+    """
+    # authors: comma-separated string or list
+    raw_authors = raw.get("authors", "")
+    if isinstance(raw_authors, list):
+        authors = raw_authors
+    else:
+        authors = [a.strip() for a in str(raw_authors).split("&") if a.strip()]
+
+    # formats: single path string or list of path strings
+    raw_formats = raw.get("formats", "")
+    if isinstance(raw_formats, list):
+        fmt_paths = raw_formats
+    elif raw_formats:
+        fmt_paths = [raw_formats]
+    else:
+        fmt_paths = []
+
+    exts = [Path(p).suffix.lstrip(".").lower() for p in fmt_paths if p]
+
+    return {
+        "id": int(raw.get("id", -1)),
+        "title": str(raw.get("title", "")),
+        "authors": authors,
+        "formats": exts,
+    }
+
+
 def _parse_formats(stdout: str) -> set[str]:
     """Extract lowercase format extensions from calibredb list --fields formats output.
 
@@ -240,8 +319,11 @@ def _parse_book_id(stdout: str) -> int:
       - "book id: 42"
       - Plain integer on its own line
 
-    Falls back to extracting the last bare integer from the output, which
-    is almost always the book ID.  Returns -1 only if stdout is empty.
+    Returns -1 if no ID can be found.
+
+    WARNING: do NOT fall back to "last integer in stdout" — third-party
+    plugins (e.g. DeDRM) write timing info like "0.2 seconds" to stdout,
+    and the last integer found would be 2, which is a valid Calibre book ID.
     """
     # Canonical: "Added book ids: 42" or "Added book ids:42"
     m = re.search(r"Added book ids?:\s*(\d+)", stdout, re.IGNORECASE)
@@ -251,9 +333,10 @@ def _parse_book_id(stdout: str) -> int:
     m = re.search(r"\bbook\s+id:\s*(\d+)", stdout, re.IGNORECASE)
     if m:
         return int(m.group(1))
-    # Last resort: grab every integer and return the last one.
-    # calibredb always prints the assigned ID somewhere in stdout.
-    numbers = re.findall(r"\b(\d+)\b", stdout)
-    if numbers:
-        return int(numbers[-1])
-    return -1   # unknown ID; import still succeeded but metadata won't be set
+    # Last resort: a standalone integer on its own line
+    # (some calibredb versions print just the ID with nothing else on that line)
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return -1

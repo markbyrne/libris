@@ -24,7 +24,7 @@ from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
 from .base import CalibreBackend
-from .local import _BOOK_EXTENSIONS, _metadata_flags, _parse_book_id, _parse_formats
+from .local import _BOOK_EXTENSIONS, _metadata_flags, _normalise_book_entry, _parse_book_id, _parse_formats
 
 log = logging.getLogger(__name__)
 
@@ -44,11 +44,12 @@ class DockerCalibre(CalibreBackend):
 
     def add_book(self, file_path: Path) -> int:
         container_path = self._translate(file_path)
+        # Do NOT pass --automerge ignore — see LocalCalibre.add_book for the
+        # full explanation.  Libris handles duplicates before calling add_book.
         cmd = [
             "docker", "exec", self._container,
             "calibredb", "add",
             container_path,
-            "--automerge", "ignore",
         ]
         log.debug("calibre.docker.add", extra={"cmd": cmd})
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -62,7 +63,17 @@ class DockerCalibre(CalibreBackend):
                 f"docker calibredb add failed (rc={result.returncode}): {result.stderr.strip()}"
             )
 
+        if "were not added" in result.stderr or "was not added" in result.stderr:
+            raise CalibreImportError(
+                f"calibredb refused to add {file_path.name}: {result.stderr.strip()}"
+            )
+
         book_id = _parse_book_id(result.stdout)
+        if book_id < 0:
+            raise CalibreImportError(
+                f"docker calibredb add returned no book ID for {file_path.name}. "
+                f"stdout: {result.stdout.strip()!r}"
+            )
         log.info("calibre.docker.added", extra={"file": str(file_path), "book_id": book_id})
         return book_id
 
@@ -97,6 +108,9 @@ class DockerCalibre(CalibreBackend):
             "  <manifest>\n"
             f"    <item href='{cover_name}' id='cover-image' media-type='{mime}'/>\n"
             "  </manifest>\n"
+            "  <guide>\n"
+            f"    <reference href='{cover_name}' type='cover' title='Cover'/>\n"
+            "  </guide>\n"
             "</package>\n"
         )
 
@@ -225,6 +239,25 @@ class DockerCalibre(CalibreBackend):
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         return _parse_formats(result.stdout)
+
+    def list_books(self) -> list[dict]:
+        import json as _json
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "list",
+            "--for-machine",
+            "--fields", "id,title,authors,formats",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.docker.list_books_failed", extra={"stderr": result.stderr})
+            return []
+        try:
+            raw = _json.loads(result.stdout)
+        except _json.JSONDecodeError:
+            log.warning("calibre.docker.list_books_parse_error", extra={"stdout": result.stdout[:200]})
+            return []
+        return [_normalise_book_entry(b) for b in raw]
 
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         container_input = self._translate(input_path)

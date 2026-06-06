@@ -620,6 +620,42 @@ libris revert-import --search "Caliban"
 
 ---
 
+### `clean-library` — deduplicate and fix Unknown books
+
+Scans the Calibre library in two passes:
+
+1. **Dedup** — groups books by title + author; for each group with more than one entry, merges all formats into the first (lowest-ID) book and removes the extras.
+
+2. **Unknown** — finds books whose title or every author is `Unknown`; exports the file(s) and drops them into `incoming/` so the normal pipeline can re-match and import them with correct metadata.
+
+```bash
+# Preview what will change (safe — no modifications)
+libris clean-library --dry-run
+
+# Apply
+libris clean-library
+libris run              # re-imports anything moved to incoming/
+```
+
+Example output:
+
+```
+  14 book(s) in Calibre library
+
+  ── Pass 1: Dedup ──
+    remove duplicate book 18 ('Brisingr' by Christopher Paolini) [M4B]
+    remove duplicate book 19 ('Eldest' by Christopher Paolini) [M4B]
+    remove duplicate book 20 ('Eragon' by Christopher Paolini) [M4B]
+
+  ── Pass 2: Unknown metadata ──
+    re-queue book 14 (EPUB)
+       → incoming/Unknown.epub
+
+  1 book(s) moved to incoming/. Run 'libris run' to re-import them.
+```
+
+---
+
 ### `reset` — unstick processing records
 
 If Libris crashes mid-import, files can be left in `PROCESSING` state and skipped on re-run. This command resets them to `INCOMING` so they'll be processed next time.

@@ -194,6 +194,47 @@ class Pipeline:
         self._store.upsert(record)
 
         try:
+            # ── Format-merge check ────────────────────────────────────────
+            # force_import (called from review-accept) bypasses _handle_duplicate.
+            # Still do a format-merge pass so that accepting an EPUB doesn't
+            # create a duplicate record when the book already exists in Calibre
+            # as a different format (e.g. M4B already there → add EPUB to it).
+            if not self.config.metadata.mock_mode:
+                dup_ids = self._find_calibre_duplicates(result.title, result.author)
+                if dup_ids:
+                    incoming_fmt = path.suffix.lstrip(".").lower()
+                    try:
+                        existing_formats = self._calibre.get_formats(dup_ids[0])
+                    except Exception:
+                        existing_formats = set()
+                    if incoming_fmt not in existing_formats:
+                        try:
+                            self._calibre.add_format(dup_ids[0], path)
+                            path.unlink(missing_ok=True)
+                            if result.cover_path:
+                                result.cover_path.unlink(missing_ok=True)
+                            record.state = FileState.IMPORTED
+                            record.calibre_book_id = dup_ids[0]
+                            record.error_msg = (
+                                f"Added {incoming_fmt.upper()} format to "
+                                f"Calibre book {dup_ids[0]}"
+                            )
+                            self._store.upsert(record)
+                            log.info(
+                                "pipeline.force_import_format_merged",
+                                extra={
+                                    "book_id": dup_ids[0],
+                                    "format": incoming_fmt,
+                                    "title": result.title,
+                                },
+                            )
+                            return record
+                        except Exception as exc:
+                            log.warning(
+                                "pipeline.force_import_add_format_failed: %s", exc
+                            )
+                            # fall through — add_book will create a new record
+
             # Embed audio tags before adding to Calibre (cover set via set_cover instead)
             if media_type == MediaType.AUDIOBOOK:
                 audio_tag.embed_metadata(path, result, overwrite=True)
