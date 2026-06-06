@@ -875,10 +875,15 @@ def review_accept(
               help="Recover by position from the failed list")
 @click.option("--all", "recover_all", is_flag=True, default=False,
               help="Recover every failed file back to review/")
+@click.option("--delete", "delete_records", is_flag=True, default=False,
+              help="Remove the DB record(s) instead of recovering to review/. "
+                   "Alone: removes only records whose file is already gone. "
+                   "With --id or --all: removes those records (and their files if present).")
 @_CONFIG_OPTION
 def recover(
     recover_id: Optional[int],
     recover_all: bool,
+    delete_records: bool,
     config_path: Optional[Path],
 ) -> None:
     """Move failed files back to review/ for re-processing.
@@ -887,10 +892,16 @@ def recover(
     recover them.  Recovered files appear in 'libris list-review' and can be
     fixed with 'libris rematch'.
 
+    Use --delete to clean up records that can't be recovered (e.g. the file
+    is already gone):
+
     \b
-      libris recover             # list failed files
-      libris recover --id 1     # move file [1] back to review/
-      libris recover --all      # move all failed files back to review/
+      libris recover                    # list failed files
+      libris recover --id 1            # move file [1] back to review/
+      libris recover --all             # move all failed files back to review/
+      libris recover --delete          # remove records where file is missing
+      libris recover --delete --id 1  # remove a specific record (and file)
+      libris recover --delete --all   # remove all failed records
     """
     path = _resolve_config(config_path)
     config = load_config(path)
@@ -903,7 +914,8 @@ def recover(
         return
 
     # ── List mode (no action flag) ────────────────────────────────────────
-    if recover_id is None and not recover_all:
+    has_missing = any(not Path(r.current_path).exists() for r in records)
+    if recover_id is None and not recover_all and not delete_records:
         store.close()
         click.echo()
         click.echo(f"  {len(records)} file(s) in failed state")
@@ -917,14 +929,53 @@ def recover(
             if r.error_msg:
                 click.echo(f"        Error:   {r.error_msg[:120]}")
             click.echo(f"        Path:    \"{r.current_path}\"")
+            if not exists:
+                click.echo(click.style(f"        libris recover --delete --id {i}", dim=True))
             click.echo()
         click.echo(_hr())
         click.echo("  Recover by ID:   libris recover --id <N>")
         click.echo("  Recover all:     libris recover --all")
+        if has_missing:
+            click.echo("  Delete missing:  libris recover --delete")
         click.echo()
         return
 
-    # ── Determine targets ─────────────────────────────────────────────────
+    # ── Delete mode ───────────────────────────────────────────────────────
+    if delete_records:
+        if recover_id is not None:
+            if recover_id < 1 or recover_id > len(records):
+                store.close()
+                _die(
+                    f"ID {recover_id} out of range — {len(records)} failed file(s).\n"
+                    "  Run 'libris recover' to see current IDs."
+                )
+            targets = [records[recover_id - 1]]
+        elif recover_all:
+            targets = list(records)
+        else:
+            # Default: only records whose file is already gone
+            targets = [r for r in records if not Path(r.current_path).exists()]
+            if not targets:
+                store.close()
+                click.echo(
+                    "\n  All failed files still exist on disk — nothing to delete.\n"
+                    "  Use --delete --id <N> or --delete --all to force-remove.\n"
+                )
+                return
+
+        click.echo()
+        for record in targets:
+            name = Path(record.current_path).name
+            Path(record.current_path).unlink(missing_ok=True)
+            record.state = FileState.IMPORTED
+            record.error_msg = "Deleted by user from failed queue"
+            store.upsert(record)
+            click.echo(f"  🗑   {name}")
+        store.close()
+        click.echo()
+        return
+
+    # ── Determine targets for recovery ────────────────────────────────────
     if recover_id is not None:
         if recover_id < 1 or recover_id > len(records):
             store.close()
