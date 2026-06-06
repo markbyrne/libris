@@ -490,22 +490,82 @@ class Pipeline:
                 self._store.upsert(r)
 
     def _process_audiobook_folder(self, folder: Path, record: FileRecord) -> FileRecord:
-        """Combine a folder of audio parts into a single M4B and import."""
-        audio_files = audio_conv.find_audio_files(folder)
+        """Dispatch files in a dropped directory through the normal per-file pipeline.
+
+        Rather than blindly concatenating everything, each *direct-child* audio
+        file is routed through the existing single-file path:
+
+        - No part marker  → direct metadata lookup + Calibre import
+        - Part marker     → PENDING_PARTS grouping; auto-combine fires when
+                            the complete set for that group is staged
+
+        This correctly handles a "library drop" directory that mixes standalone
+        books, multi-part books, and multiple series — e.g.:
+
+            Christopher Paolini/
+              Eragon.m4b                          → single import
+              Eldest.m4b                          → single import
+              Brisingr (part 1 of 3).m4b  ┐
+              Brisingr (part 2 of 3).m4b  ├─ grouped → combined → import
+              Brisingr (part 3 of 3).m4b  ┘
+              Inheritance (part 1 of 3).m4b  ┐
+              Inheritance (part 2 of 3).m4b  ├─ separate group → combined
+              Inheritance (part 3 of 3).m4b  ┘
+        """
+        # Only scan direct children — nested subdirectories are not supported.
+        audio_files = audio_conv.find_audio_files(folder, recursive=False)
         if not audio_files:
             from .exceptions import ConversionError
             raise ConversionError(f"No audio files found in {folder}")
 
-        out_name = folder.name + ".m4b"
-        m4b_path = self.config.paths.staging_dir / out_name
-
         log.info(
-            "pipeline.audio.combining",
-            extra={"parts": len(audio_files), "output": str(m4b_path)},
+            "pipeline.audio.folder_dispatch",
+            extra={"folder": folder.name, "count": len(audio_files)},
         )
-        audio_conv.combine_parts(audio_files, m4b_path)
 
-        return self._resolve_tag_and_import_audio(m4b_path, record, original_path=folder)
+        last_record = record
+        for audio_file in audio_files:
+            file_record = self._get_or_create_record(audio_file, "audiobook")
+
+            # Skip files already handled (e.g. a partial-run restart)
+            if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
+                log.info(
+                    "pipeline.audio.folder_skip",
+                    extra={"file": audio_file.name, "state": file_record.state.value},
+                )
+                continue
+            if (file_record.state == FileState.PENDING_PARTS
+                    and Path(file_record.current_path).exists()):
+                continue  # already staged, waiting for sibling parts
+
+            file_record.state = FileState.PROCESSING
+            self._store.upsert(file_record)
+
+            try:
+                last_record = self._process_audiobook(audio_file, file_record)
+            except BookPipelineError as exc:
+                log.exception(
+                    "pipeline.audio.folder_file_failed",
+                    extra={"file": str(audio_file)},
+                )
+                last_record = self._mark_failed(file_record, exc)
+
+        # Each file was moved/converted/deleted by its individual processing
+        # step; the directory should now be empty.  Clean it up if possible.
+        try:
+            folder.rmdir()
+            log.info("pipeline.audio.folder_cleaned", extra={"folder": str(folder)})
+        except OSError:
+            # Not empty — some files may have failed; leave for the user.
+            log.debug("pipeline.audio.folder_not_empty", extra={"folder": str(folder)})
+
+        # Mark the directory's own record as a processed container so the
+        # periodic scan never re-dispatches it.
+        record.state = FileState.IMPORTED
+        record.error_msg = f"Directory: dispatched {len(audio_files)} file(s)"
+        self._store.upsert(record)
+
+        return last_record
 
     def _resolve_tag_and_import_audio(
         self,

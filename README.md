@@ -616,14 +616,21 @@ Duplicate candidates (same book, different editions) are deduplicated before sco
 
 All ebook formats are converted to your `preferred_ebook_format` (default: epub) before import unless `ebook_format_policy: all` is set.
 
-Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of audio files) are also supported — drop the whole directory into `incoming/` and it will be combined and imported as a single M4B.
+Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of audio files) are also supported — drop the whole directory into `incoming/` and each file is dispatched individually through the normal pipeline.
+
+Files without part markers are imported as standalone books. Files with matching part markers are automatically grouped and combined. A single directory can contain a mix of standalone books and multi-part series:
 
 ```
 incoming/
-  Brisingr/          ← directory dropped in
-    01 - Chapter 1.mp3
-    02 - Chapter 2.mp3
-    ...              → combined → staging/Brisingr.m4b → Calibre ✅
+  Christopher Paolini/
+    Eragon.m4b                         → imported individually ✅
+    Eldest.m4b                         → imported individually ✅
+    Brisingr (part 1 of 3).m4b  ┐
+    Brisingr (part 2 of 3).m4b  ├──── combined → Brisingr.m4b → Calibre ✅
+    Brisingr (part 3 of 3).m4b  ┘
+    Inheritance (part 1 of 3).m4b  ┐
+    Inheritance (part 2 of 3).m4b  ├── combined → Inheritance.m4b → Calibre ✅
+    Inheritance (part 3 of 3).m4b  ┘
 ```
 
 ---
