@@ -200,9 +200,16 @@ class Pipeline:
 
             book_id = self._calibre.add_book(path)
             record.calibre_book_id = book_id
-            self._calibre.set_metadata(book_id, result)
+            # set_cover MUST run before set_metadata.  The OPF file passed to
+            # "calibredb set_metadata BOOK_ID cover.opf" replaces *all* book
+            # metadata with the OPF's contents.  Our cover OPF has no dc:title
+            # or dc:creator, so running cover after metadata would silently
+            # reset title/authors to "Unknown".  With cover first, set_metadata
+            # (which uses --field flags) then writes title/authors without
+            # touching the cover field.
             if self.config.output.embed_cover_art and result.cover_path:
                 self._calibre.set_cover(book_id, result.cover_path)
+            self._calibre.set_metadata(book_id, result)
 
             # original_path == processed_path here (file is already in final format)
             return self._mark_imported(record, path, path, result)
@@ -675,9 +682,12 @@ class Pipeline:
         log.info("pipeline.audio.imported", extra={"book_id": book_id, "title": result.title})
 
         # ── Full metadata + cover in Calibre ──────────────────────────
-        self._calibre.set_metadata(book_id, result)
+        # Cover before metadata: the OPF file used by set_cover replaces all
+        # book metadata, which would clobber title/authors.  set_metadata
+        # (--field flags) runs last and writes title/authors without clearing cover.
         if self.config.output.embed_cover_art and result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
+        self._calibre.set_metadata(book_id, result)
 
         return self._mark_imported(record, m4b_path, original_path, result)
 
@@ -778,9 +788,12 @@ class Pipeline:
         )
 
         # ── Full metadata + cover in Calibre ──────────────────────────
-        self._calibre.set_metadata(book_id, result)
+        # Cover before metadata: the OPF file used by set_cover replaces all
+        # book metadata, which would clobber title/authors.  set_metadata
+        # (--field flags) runs last and writes title/authors without clearing cover.
         if self.config.output.embed_cover_art and result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
+        self._calibre.set_metadata(book_id, result)
 
         # _mark_imported deletes book_path (staging converted copy) if it
         # differs from path (source), then deletes path (source).  In

@@ -527,6 +527,23 @@ libris recover --all
 
 After recovery, files appear in `libris list-review` and can be fixed with `libris rematch`.
 
+#### Deleting unrecoverable files
+
+If a file is gone from disk (e.g. already deleted manually) but is still listed as failed, use `--delete` to clean up the stale record:
+
+```bash
+# Delete all failed records whose file is already missing
+libris recover --delete
+
+# Delete a specific stale record (with or without a file present)
+libris recover --delete --id 1
+
+# Delete all failed records (removes files from disk if still present)
+libris recover --delete --all
+```
+
+This marks the record as resolved in the state database without trying to move anything.
+
 ---
 
 ### `list-pending` — check multi-part audiobooks in progress
