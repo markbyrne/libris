@@ -9,6 +9,8 @@ Commands:
   libris review-accept   — Force-import a file from review/, bypassing confidence check
   libris reset           — Reset stuck PROCESSING records back to INCOMING
   libris recover         — Move failed files back to review/ for re-processing
+  libris list-pending    — Show multi-part audiobooks waiting for sibling parts
+  libris combine-parts   — Force-combine a pending part group and import
   libris revert-import   — Remove a book from Calibre and return it to review/
   libris search          — Search the Calibre library (uses library path from config)
   libris rematch         — Interactively re-query metadata APIs for a review item
@@ -741,6 +743,174 @@ def recover(
     click.echo("  Run 'libris rematch --id <N>' to fix the metadata match.")
     click.echo()
     sys.exit(1 if any_failed else 0)
+
+
+@main.command("list-pending")
+@_CONFIG_OPTION
+def list_pending(config_path: Optional[Path]) -> None:
+    """Show multi-part audiobooks waiting for all parts to arrive.
+
+    Parts are held in staging/pending/ until the complete set is received,
+    then automatically combined and imported.  Groups that time out appear
+    here until you run 'libris combine-parts --id <N>' to force-combine
+    whatever parts are available.
+
+    \b
+      libris list-pending
+    """
+    from datetime import datetime, timezone, timedelta
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = StateStore(config.paths.state_db)
+    groups = store.list_pending_groups()
+    store.close()
+
+    click.echo()
+    if not groups:
+        click.echo("  No pending part groups.\n")
+        return
+
+    click.echo(f"  {len(groups)} pending group(s)")
+    click.echo(_hr())
+    click.echo()
+
+    now = datetime.now(timezone.utc)
+    timeout_td = timedelta(hours=config.multipart.timeout_hours)
+
+    for i, (group_key, records) in enumerate(groups.items(), 1):
+        oldest = min(records, key=lambda r: r.created_at)
+        age = now - oldest.created_at
+        time_left = timeout_td - age
+        timed_out = time_left.total_seconds() <= 0
+
+        # Determine which part numbers we have vs expect
+        received_nums = sorted(r.part_num for r in records if r.part_num is not None)
+        total = records[0].total_parts
+        total_str = str(total) if total else "?"
+
+        if total:
+            missing = sorted(set(range(1, total + 1)) - set(received_nums))
+            missing_str = ", ".join(str(m) for m in missing) if missing else "none"
+        else:
+            missing_str = "unknown"
+
+        click.echo(f"  [{i}]  {click.style(group_key, bold=True)}")
+        click.echo(f"        Parts:    {len(received_nums)} of {total_str} received"
+                   + (click.style(f"  (missing: {missing_str})", fg="yellow") if missing_str != "none" else ""))
+
+        age_str = _fmt_age(age)
+        if timed_out:
+            click.echo(click.style(f"        Age:      {age_str}  ⚠ TIMED OUT", fg="red"))
+        else:
+            hrs_left = int(time_left.total_seconds() / 3600)
+            mins_left = int((time_left.total_seconds() % 3600) / 60)
+            click.echo(f"        Age:      {age_str}  (times out in {hrs_left}h {mins_left}m)")
+
+        for r in records:
+            exists = Path(r.current_path).exists()
+            marker = click.style("✓", fg="green") if exists else click.style("✗", fg="red")
+            click.echo(f"        {marker} part {r.part_num}  {Path(r.current_path).name}")
+        click.echo()
+
+    click.echo(_hr())
+    click.echo("  Force-combine:  libris combine-parts --id <N>")
+    click.echo("  Combine all:    libris combine-parts --all")
+    click.echo()
+
+
+@main.command("combine-parts")
+@click.option("--id", "group_id", type=int, default=None,
+              help="Group position from 'libris list-pending'")
+@click.option("--all", "combine_all", is_flag=True, default=False,
+              help="Force-combine all pending groups with available parts")
+@_CONFIG_OPTION
+def combine_parts(
+    group_id: Optional[int],
+    combine_all: bool,
+    config_path: Optional[Path],
+) -> None:
+    """Force-combine a pending part group and import it into Calibre.
+
+    Use this when you want to import without waiting for all parts, or when
+    the timeout has fired but you still want to use the parts you have.
+
+    \b
+      libris combine-parts --id 1      # combine group [1]
+      libris combine-parts --all       # combine every pending group
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+
+    store = StateStore(config.paths.state_db)
+    groups = store.list_pending_groups()
+    store.close()
+
+    if not groups:
+        click.echo("\n  No pending groups.\n")
+        return
+
+    group_list = list(groups.items())
+
+    if group_id is None and not combine_all:
+        _die(
+            "Provide --id <N> or --all.\n"
+            "  Run 'libris list-pending' to see pending groups and their IDs."
+        )
+
+    if group_id is not None:
+        if group_id < 1 or group_id > len(group_list):
+            _die(
+                f"ID {group_id} out of range — {len(group_list)} group(s).\n"
+                "  Run 'libris list-pending' to see current IDs."
+            )
+        targets = [group_list[group_id - 1]]
+    else:
+        targets = group_list
+
+    pipeline = Pipeline(config)
+    click.echo()
+    any_failed = False
+
+    for group_key, records in targets:
+        # Filter to parts that still exist on disk
+        live = [r for r in records if Path(r.current_path).exists()]
+        if not live:
+            click.echo(click.style(f"  ⚠   [{group_key}] all files missing — skipping", fg="yellow"))
+            any_failed = True
+            continue
+
+        click.echo(f"  Combining {len(live)} part(s) for: {group_key}")
+        try:
+            result_record = pipeline._combine_pending_group(group_key, live)
+            if result_record.state == FileState.IMPORTED:
+                click.echo(click.style(
+                    f"  ✅  {result_record.matched_title or group_key}", fg="green"
+                ))
+                if result_record.matched_author:
+                    click.echo(f"       Author:  {result_record.matched_author}")
+                click.echo(f"       Score:   {result_record.confidence:.2f}")
+            else:
+                click.echo(f"  🔍  {result_record.matched_title or group_key} → review/")
+                click.echo(f"       Run 'libris rematch' to find the correct match.")
+        except Exception as exc:
+            click.echo(click.style(f"  ❌  {group_key}: {exc}", fg="red"), err=True)
+            any_failed = True
+        click.echo()
+
+    sys.exit(1 if any_failed else 0)
+
+
+def _fmt_age(delta) -> str:
+    """Format a timedelta as a human-readable age string."""
+    total = int(delta.total_seconds())
+    if total < 3600:
+        return f"{total // 60}m"
+    if total < 86400:
+        h, m = divmod(total // 60, 60)
+        return f"{h}h {m}m"
+    d, rem = divmod(total, 86400)
+    return f"{d}d {rem // 3600}h"
 
 
 @main.command("search")

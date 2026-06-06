@@ -23,6 +23,7 @@ from .audio import tagger as audio_tag
 from .calibre import get_calibre
 from .calibre.base import CalibreBackend
 from .classifier import Classifier, MediaType
+from .cleaner import clean_query, extract_part, strip_part_marker
 from .config import Config
 from .ebook import converter as ebook_conv
 from .exceptions import BookPipelineError, ClassificationError
@@ -107,6 +108,7 @@ class Pipeline:
         for d in [
             config.watcher.incoming_dir,
             config.paths.staging_dir,
+            config.paths.staging_dir / "pending",
             config.paths.review_dir,
             config.paths.failed_dir,
         ]:
@@ -126,6 +128,7 @@ class Pipeline:
                 "threshold": self.config.metadata.confidence_threshold,
             },
         )
+        self._check_pending_timeouts()
         try:
             for event in self._watcher.events():
                 self._handle_event(event)
@@ -241,7 +244,7 @@ class Pipeline:
 
         # ── Dedup check ───────────────────────────────────────────────
         record = self._get_or_create_record(path, media_type.value)
-        if record.state in (FileState.IMPORTED, FileState.PROCESSING):
+        if record.state in (FileState.IMPORTED, FileState.PROCESSING, FileState.PENDING_PARTS):
             log.info(
                 "pipeline.skip_duplicate",
                 extra={"path": str(path), "state": record.state.value},
@@ -273,6 +276,11 @@ class Pipeline:
         if path.is_dir():
             return self._process_audiobook_folder(path, record)
 
+        # ── Multi-part detection ──────────────────────────────────────
+        part_num, total_parts = extract_part(path.stem)
+        if part_num is not None:
+            return self._handle_pending_part(path, record, part_num, total_parts)
+
         # Single audio file
         ext = path.suffix.lstrip(".").lower()
 
@@ -285,6 +293,127 @@ class Pipeline:
             m4b_path = path
 
         return self._resolve_tag_and_import_audio(m4b_path, record, original_path=path)
+
+    # ------------------------------------------------------------------
+    # Multi-part audiobook pipeline
+    # ------------------------------------------------------------------
+
+    def _handle_pending_part(
+        self,
+        path: Path,
+        record: FileRecord,
+        part_num: int,
+        total_parts: Optional[int],
+    ) -> FileRecord:
+        """Stage a single part file and combine+import when the set is complete."""
+        # Build stable group key: clean title with part marker stripped
+        stripped_stem = strip_part_marker(path.stem)
+        group_key = (clean_query(stripped_stem) or stripped_stem).lower().strip()
+
+        # Move part to pending staging area
+        pending_dir = self.config.paths.staging_dir / "pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        dest = pending_dir / path.name
+        _safe_move(path, dest)
+
+        record.part_num = part_num
+        record.total_parts = total_parts
+        record.part_group_key = group_key
+        record.current_path = str(dest)
+        record.state = FileState.PENDING_PARTS
+        self._store.upsert(record)
+
+        log.info(
+            "pipeline.audio.pending_part",
+            extra={
+                "file": path.name,
+                "part": part_num,
+                "total": total_parts,
+                "group": group_key,
+            },
+        )
+
+        # Only attempt auto-combine when we know the total and it's now complete
+        if total_parts is not None:
+            group_records = self._store.list_pending_group(group_key)
+            received = {r.part_num for r in group_records if r.part_num is not None}
+            expected = set(range(1, total_parts + 1))
+            if received >= expected:
+                return self._combine_pending_group(group_key, group_records)
+
+        self._notifier.send_pending_parts_alert(record)
+        return record
+
+    def _combine_pending_group(
+        self,
+        group_key: str,
+        group_records: list[FileRecord],
+    ) -> FileRecord:
+        """Combine a complete (or force-combined) set of parts into one M4B."""
+        parts = sorted(group_records, key=lambda r: r.part_num or 0)
+        part_files = [Path(r.current_path) for r in parts]
+
+        # Output filename: stripped stem of the first part
+        stripped_stem = strip_part_marker(Path(part_files[0]).stem)
+        out_path = self.config.paths.staging_dir / f"{stripped_stem}.m4b"
+
+        log.info(
+            "pipeline.audio.combining_parts",
+            extra={"group": group_key, "parts": len(parts), "output": str(out_path)},
+        )
+        audio_conv.combine_parts(part_files, out_path)
+
+        # Primary record is the first part; mark remaining parts as consumed
+        primary = parts[0]
+        for r in parts[1:]:
+            r.state = FileState.IMPORTED
+            r.error_msg = f"Combined into {out_path.name}"
+            self._store.upsert(r)
+            # Remove the individual part file — it's now in the combined M4B
+            Path(r.current_path).unlink(missing_ok=True)
+
+        # Clear part fields on the primary record before continuing
+        primary.part_num = None
+        primary.total_parts = None
+        primary.current_path = str(out_path)
+
+        return self._resolve_tag_and_import_audio(out_path, primary, original_path=part_files[0])
+
+    def _check_pending_timeouts(self) -> None:
+        """Escalate overdue pending-part groups to review/ on daemon startup.
+
+        Groups that have been waiting longer than config.multipart.timeout_hours
+        are moved to review/ with an error message so the user can decide whether
+        to force-combine or wait for the missing parts.
+        """
+        from datetime import timedelta, datetime, timezone as _tz
+        timeout = timedelta(hours=self.config.multipart.timeout_hours)
+        now = datetime.now(_tz.utc)
+
+        groups = self._store.list_pending_groups()
+        for group_key, records in groups.items():
+            oldest = min(records, key=lambda r: r.created_at)
+            if now - oldest.created_at <= timeout:
+                continue
+
+            received = len(records)
+            total = records[0].total_parts or "?"
+            log.warning(
+                "pipeline.audio.parts_timeout",
+                extra={"group": group_key, "received": received, "total": total},
+            )
+            for r in records:
+                current = Path(r.current_path)
+                dest = self.config.paths.review_dir / current.name
+                _safe_move(current, dest)
+                r.state = FileState.REVIEW
+                r.current_path = str(dest)
+                r.error_msg = (
+                    f"Partial: {received} of {total} parts after "
+                    f"{self.config.multipart.timeout_hours:.0f}h — "
+                    "run 'libris combine-parts' to import what's available"
+                )
+                self._store.upsert(r)
 
     def _process_audiobook_folder(self, folder: Path, record: FileRecord) -> FileRecord:
         """Combine a folder of audio parts into a single M4B and import."""

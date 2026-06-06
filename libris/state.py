@@ -26,11 +26,12 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 class FileState(str, Enum):
-    INCOMING   = "incoming"    # detected by watcher, not yet started
-    PROCESSING = "processing"  # actively being converted / looked up / imported
-    IMPORTED   = "imported"    # calibredb rc=0; source file deleted
-    REVIEW     = "review"      # confidence < threshold; moved to review/ dir
-    FAILED     = "failed"      # unrecoverable error; moved to failed/ dir
+    INCOMING      = "incoming"       # detected by watcher, not yet started
+    PROCESSING    = "processing"     # actively being converted / looked up / imported
+    IMPORTED      = "imported"       # calibredb rc=0; source file deleted
+    REVIEW        = "review"         # confidence < threshold; moved to review/ dir
+    FAILED        = "failed"         # unrecoverable error; moved to failed/ dir
+    PENDING_PARTS = "pending_parts"  # part N of M; waiting for siblings before combine
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,11 @@ class FileRecord:
     # Full serialised ScoredCandidate JSON — used by review-accept to import
     # without hitting the API again.  Set when file enters review.
     matched_metadata_json: Optional[str] = None
+    # Multi-part audiobook tracking — set when state == PENDING_PARTS.
+    # part_group_key groups sibling parts together (normalised clean title).
+    part_num: Optional[int] = None
+    total_parts: Optional[int] = None
+    part_group_key: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -78,23 +84,26 @@ class FileRecord:
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS files (
-    id                TEXT PRIMARY KEY,
-    original_path     TEXT NOT NULL,
-    current_path      TEXT NOT NULL,
-    media_type        TEXT NOT NULL,
-    state             TEXT NOT NULL,
-    confidence        REAL,
-    matched_title     TEXT,
-    matched_author    TEXT,
-    error_msg         TEXT,
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL,
-    calibre_book_id   INTEGER,
+    id                    TEXT PRIMARY KEY,
+    original_path         TEXT NOT NULL,
+    current_path          TEXT NOT NULL,
+    media_type            TEXT NOT NULL,
+    state                 TEXT NOT NULL,
+    confidence            REAL,
+    matched_title         TEXT,
+    matched_author        TEXT,
+    error_msg             TEXT,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    calibre_book_id       INTEGER,
     matched_year          INTEGER,
     matched_publisher     TEXT,
     matched_isbn          TEXT,
     matched_cover_url     TEXT,
-    matched_metadata_json TEXT
+    matched_metadata_json TEXT,
+    part_num              INTEGER,
+    total_parts           INTEGER,
+    part_group_key        TEXT
 );
 """
 
@@ -104,9 +113,10 @@ INSERT INTO files
      confidence, matched_title, matched_author, error_msg, calibre_book_id,
      matched_year, matched_publisher, matched_isbn, matched_cover_url,
      matched_metadata_json,
+     part_num, total_parts, part_group_key,
      created_at, updated_at)
 VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     current_path          = excluded.current_path,
     media_type            = excluded.media_type,
@@ -121,6 +131,9 @@ ON CONFLICT(id) DO UPDATE SET
     matched_isbn          = excluded.matched_isbn,
     matched_cover_url     = excluded.matched_cover_url,
     matched_metadata_json = excluded.matched_metadata_json,
+    part_num              = excluded.part_num,
+    total_parts           = excluded.total_parts,
+    part_group_key        = excluded.part_group_key,
     updated_at            = excluded.updated_at;
 """
 
@@ -144,12 +157,15 @@ class StateStore:
         # ALTER TABLE always appends to the end — named access in _row_to_record
         # means column order doesn't matter.
         for _migration in [
-            "ALTER TABLE files ADD COLUMN calibre_book_id   INTEGER;",
-            "ALTER TABLE files ADD COLUMN matched_year      INTEGER;",
-            "ALTER TABLE files ADD COLUMN matched_publisher TEXT;",
-            "ALTER TABLE files ADD COLUMN matched_isbn      TEXT;",
+            "ALTER TABLE files ADD COLUMN calibre_book_id       INTEGER;",
+            "ALTER TABLE files ADD COLUMN matched_year          INTEGER;",
+            "ALTER TABLE files ADD COLUMN matched_publisher     TEXT;",
+            "ALTER TABLE files ADD COLUMN matched_isbn          TEXT;",
             "ALTER TABLE files ADD COLUMN matched_cover_url     TEXT;",
             "ALTER TABLE files ADD COLUMN matched_metadata_json TEXT;",
+            "ALTER TABLE files ADD COLUMN part_num              INTEGER;",
+            "ALTER TABLE files ADD COLUMN total_parts           INTEGER;",
+            "ALTER TABLE files ADD COLUMN part_group_key        TEXT;",
         ]:
             try:
                 self._conn.execute(_migration)
@@ -179,6 +195,9 @@ class StateStore:
             record.matched_isbn,
             record.matched_cover_url,
             record.matched_metadata_json,
+            record.part_num,
+            record.total_parts,
+            record.part_group_key,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
         ))
@@ -249,6 +268,35 @@ class StateStore:
         )
         return result.rowcount
 
+    def list_pending_group(self, group_key: str) -> list[FileRecord]:
+        """Return all PENDING_PARTS records for a specific group key, ordered by part_num."""
+        rows = self._conn.execute(
+            "SELECT * FROM files WHERE state = 'pending_parts' AND part_group_key = ?"
+            " ORDER BY part_num ASC",
+            (group_key,),
+        ).fetchall()
+        return [_row_to_record(r) for r in rows]
+
+    def list_pending_groups(self) -> dict[str, list[FileRecord]]:
+        """Return all PENDING_PARTS records grouped by part_group_key.
+
+        Groups are ordered by the oldest record's created_at (ascending).
+        Within each group, records are ordered by part_num.
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM files WHERE state = 'pending_parts'"
+            " ORDER BY part_group_key, part_num ASC",
+        ).fetchall()
+        groups: dict[str, list[FileRecord]] = {}
+        for row in rows:
+            r = _row_to_record(row)
+            key = r.part_group_key or ""
+            groups.setdefault(key, []).append(r)
+        # Sort groups by their oldest member's created_at
+        return dict(
+            sorted(groups.items(), key=lambda kv: min(r.created_at for r in kv[1]))
+        )
+
     def cleanup_stale_review(self, current_path: str, exclude_id: str = "") -> None:
         """After a force-accept import, mark any old REVIEW record at *current_path*
         as IMPORTED so it no longer appears in list-review output.
@@ -289,6 +337,9 @@ def _row_to_record(row: sqlite3.Row) -> FileRecord:
         matched_isbn=row["matched_isbn"],
         matched_cover_url=row["matched_cover_url"],
         matched_metadata_json=row["matched_metadata_json"],
+        part_num=row["part_num"],
+        total_parts=row["total_parts"],
+        part_group_key=row["part_group_key"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field  # noqa: F401 — field used in Config
 from pathlib import Path
 from typing import Literal
 
@@ -56,6 +56,14 @@ class OutputConfig:
 
 
 @dataclass
+class MultiPartConfig:
+    """Settings for multi-part audiobook handling."""
+    # After this many hours with an incomplete set, escalate parts to review/
+    # so the user can decide whether to force-combine or wait longer.
+    timeout_hours: float = 48.0
+
+
+@dataclass
 class NtfyConfig:
     topic: str = ""
     base_url: str = "https://ntfy.sh"
@@ -75,6 +83,7 @@ class Config:
     metadata: MetadataConfig
     output: OutputConfig
     ntfy: NtfyConfig
+    multipart: MultiPartConfig = field(default_factory=MultiPartConfig)
     log_level: str = "INFO"
 
 
@@ -189,6 +198,15 @@ def load_config(config_path: Path) -> Config:
         auth_token=os.environ.get("LIBRIS_NTFY_AUTH_TOKEN") or ntfy_raw.get("auth_token"),
     )
 
+    # ---- multipart ----
+    mp_raw = raw.get("multipart", {})
+    multipart = MultiPartConfig(
+        timeout_hours=float(
+            os.environ.get("LIBRIS_MULTIPART_TIMEOUT_HOURS",
+                           mp_raw.get("timeout_hours", 48.0))
+        ),
+    )
+
     log_level = os.environ.get("LIBRIS_LOG_LEVEL") or raw.get("log_level", "INFO")
     if log_level.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         raise ConfigError(f"Invalid log_level: {log_level!r}")
@@ -200,6 +218,7 @@ def load_config(config_path: Path) -> Config:
         metadata=metadata,
         output=output,
         ntfy=ntfy,
+        multipart=multipart,
         log_level=log_level.upper(),
     )
 

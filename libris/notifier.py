@@ -70,6 +70,24 @@ class Notifier:
             tags=["books", "error"],
         )
 
+    def send_pending_parts_alert(self, record: FileRecord) -> None:
+        """Notify that a part was staged and we're waiting for siblings."""
+        if not self._config.enabled or not self._config.topic:
+            return
+        filename = Path(record.current_path).name
+        received = 1  # at least the part we just stored
+        total = record.total_parts or "?"
+        self._post(
+            title=f"⏳ Part {record.part_num} of {total} received",
+            body=(
+                f"File: {filename}\n"
+                f"Waiting for remaining parts before import.\n"
+                f"Run 'libris list-pending' to check status."
+            ),
+            priority="low",
+            tags=["books", "hourglass_flowing_sand"],
+        )
+
     def send_imported_alert(self, record: FileRecord, result: Optional[MetadataResult]) -> None:
         """Notify of a successful import (optional; keeps ntfy noise low)."""
         if not self._config.enabled or not self._config.topic:

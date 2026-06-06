@@ -9,11 +9,16 @@ The cleaner is intentionally conservative — it removes known noise patterns
 without trying to extract structured title/author fields, since filename
 conventions vary wildly. The output is passed directly to search APIs as a
 free-text query.
+
+Part-detection functions (extract_part, strip_part_marker) are used by the
+pipeline to recognise multi-file audiobooks and hold them until all parts
+arrive before combining and importing.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 
 # Ordered list of (pattern, replacement) substitutions applied sequentially.
@@ -96,3 +101,97 @@ def extract_isbn(raw: str) -> str | None:
             return digits
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-part audiobook helpers
+# ---------------------------------------------------------------------------
+
+# Parenthesised patterns: (part 1 of 3)  (part 1/3)  (disc 2 of 2)
+_PART_PAREN_OF = re.compile(
+    r'\(\s*(?:part|disc|disk|cd)\s*(\d+)\s*(?:of|/)\s*(\d+)\s*\)',
+    re.IGNORECASE,
+)
+# Dot notation inside parens: (part 1.3) → part 1 of 3
+_PART_PAREN_DOT = re.compile(
+    r'\(\s*(?:part|disc|disk|cd)\s*(\d+)\.(\d+)\s*\)',
+    re.IGNORECASE,
+)
+# Bare (no parens) with total: "Part 1 of 3"  "Disc 1 of 2"
+_PART_BARE_OF = re.compile(
+    r'\b(?:part|disc|disk|cd)\s+(\d+)\s+of\s+(\d+)\b',
+    re.IGNORECASE,
+)
+# Lone part without total: "(Part 1)"  "Part 2"
+_PART_LONE_PAREN = re.compile(
+    r'\(\s*(?:part|disc|disk|cd)\s*(\d+)\s*\)',
+    re.IGNORECASE,
+)
+_PART_LONE_BARE = re.compile(
+    r'\b(?:part|disc|disk|cd)\s+(\d+)\b',
+    re.IGNORECASE,
+)
+
+# Strips all of the above from a filename stem
+_PART_STRIP_PATTERNS = (
+    _PART_PAREN_OF,
+    _PART_PAREN_DOT,
+    _PART_BARE_OF,
+    _PART_LONE_PAREN,
+    _PART_LONE_BARE,
+)
+
+
+def extract_part(raw: str) -> tuple[Optional[int], Optional[int]]:
+    """Extract (part_num, total_parts) from a filename stem.
+
+    Returns (None, None) if no part pattern is found.
+    total_parts is None when the filename only specifies the part number
+    without the total (e.g. "Part 1" with no "of N").
+
+    Examples:
+      "Brisingr (part 1 of 3)"   → (1, 3)
+      "Brisingr (part 1.3)"      → (1, 3)
+      "Brisingr (part 1/3)"      → (1, 3)
+      "Brisingr Disc 1 of 2"     → (1, 2)
+      "Brisingr Part 1"          → (1, None)
+      "Eragon"                   → (None, None)
+    """
+    # Priority order: patterns with totals first (most informative)
+    for pat in (_PART_PAREN_OF, _PART_PAREN_DOT, _PART_BARE_OF):
+        m = pat.search(raw)
+        if m:
+            try:
+                return int(m.group(1)), int(m.group(2))
+            except (ValueError, IndexError):
+                pass
+
+    # Lone part number (no total known)
+    for pat in (_PART_LONE_PAREN, _PART_LONE_BARE):
+        m = pat.search(raw)
+        if m:
+            try:
+                return int(m.group(1)), None
+            except (ValueError, IndexError):
+                pass
+
+    return None, None
+
+
+def strip_part_marker(raw: str) -> str:
+    """Remove part/disc/cd markers from a filename stem.
+
+    Used to build stable group keys and output filenames for combined files.
+
+    Examples:
+      "Brisingr (part 1 of 3)"        → "Brisingr"
+      "Inheritance Cycle 3 - Brisingr (part 2 of 3)" → "Inheritance Cycle 3 - Brisingr"
+      "Name of the Wind Disc 1 of 2"  → "Name of the Wind"
+      "Eragon"                         → "Eragon"
+    """
+    result = raw
+    for pat in _PART_STRIP_PATTERNS:
+        result = pat.sub("", result)
+    # Collapse extra spaces and trailing/leading punctuation
+    result = re.sub(r'\s{2,}', ' ', result).strip(" -–—")
+    return result
