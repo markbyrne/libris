@@ -167,16 +167,18 @@ def _live_review_records(store: "StateStore") -> list:
 
 def _render_review_record(i: int, r) -> None:
     """Print a single review-queue entry (shared by list-review and show-cover)."""
-    click.echo(f"  [{i}]  {Path(r.current_path).name}")
+    is_dup = bool(r.error_msg and r.error_msg.startswith("Duplicate:"))
+    dup_tag = "  " + click.style("[!]", fg="yellow", bold=True) if is_dup else ""
+    click.echo(f"  [{i}]{dup_tag}  {Path(r.current_path).name}")
 
     # Duplicate warning — shown before the match block
-    if r.error_msg and r.error_msg.startswith("Duplicate:"):
+    if is_dup:
         click.echo(click.style(f"        ⚠  {r.error_msg}", fg="yellow"))
         click.echo(click.style(
-            f"           To import anyway: libris review-accept --id {i} --overwrite", dim=True
+            f"           Accept (overwrite): libris review-accept --id {i} --overwrite", dim=True
         ))
         click.echo(click.style(
-            f"           To delete:        libris review-discard --id {i}", dim=True
+            f"           Discard:            libris review-discard --id {i}", dim=True
         ))
 
     if not _has_match(r):
@@ -478,10 +480,18 @@ def list_review(config_path: Optional[Path]) -> None:
         _render_review_record(i, r)
         click.echo()
 
+    has_dupes = any(
+        r.error_msg and r.error_msg.startswith("Duplicate:") for r in records
+    )
     click.echo(_hr())
     click.echo("  Accept by ID:    libris review-accept --id <N>")
     click.echo("  Accept all:      libris review-accept --accept-all")
     click.echo("  Accept by path:  libris review-accept \"<path>\"")
+    if has_dupes:
+        click.echo(click.style(
+            "  Overwrite [!]:   libris review-accept --id <N> --overwrite",
+            fg="yellow",
+        ))
     click.echo("  Fix bad match:   libris rematch --id <N>")
     click.echo("  Preview cover:   libris show-cover --id <N>")
     click.echo("  Discard:         libris review-discard --id <N>")
@@ -832,6 +842,62 @@ def review_accept(
 
         if record.state == FileState.IMPORTED:
             pipeline._store.cleanup_stale_review(str(target), exclude_id=record.id)
+
+        # ── Newly-detected duplicate ───────────────────────────────────────
+        # force_import found the same format already in Calibre even though
+        # the record wasn't pre-flagged (e.g. file went to review for low
+        # confidence, not duplicate).  Prompt interactively rather than failing.
+        is_newly_dup = (
+            not is_duplicate
+            and record.state == FileState.REVIEW
+            and record.error_msg
+            and record.error_msg.startswith("Duplicate:")
+        )
+        if is_newly_dup:
+            if accept_all:
+                # No interactive prompt in batch mode — skip and report
+                click.echo(f"  ⚠   {target.name}")
+                click.echo(click.style("       Duplicate detected — skipped.", fg="yellow"))
+                click.echo()
+                skipped_items.append((target.name, str(target)))
+                any_failed = True
+                continue
+
+            click.echo(f"  ⚠   {target.name}")
+            click.echo(click.style(f"       {record.error_msg}", fg="yellow"))
+            click.echo()
+            click.echo("       [o]  Overwrite — replace the existing Calibre entry")
+            click.echo("       [d]  Discard   — delete this file from the review queue")
+            click.echo("       [r]  Keep      — leave in review (use --overwrite later)")
+            click.echo()
+            while True:
+                dup_choice = click.prompt("       Choice", default="r").strip().lower()
+                if dup_choice in ("o", "d", "r"):
+                    break
+                click.echo(click.style("       Please enter o, d, or r.", fg="yellow"))
+
+            if dup_choice == "o":
+                pipeline.config.metadata.duplicate_action = "import"
+                record = pipeline.import_from_record(record)
+                if record.state == FileState.IMPORTED:
+                    pipeline._store.cleanup_stale_review(str(target), exclude_id=record.id)
+                # fall through to status display below
+            elif dup_choice == "d":
+                Path(record.current_path).unlink(missing_ok=True)
+                record.state = FileState.IMPORTED
+                record.error_msg = "Discarded by user (duplicate)"
+                pipeline._store.upsert(record)
+                click.echo(f"  🗑   {target.name}")
+                click.echo()
+                continue
+            else:  # r — keep in review
+                click.echo(click.style(
+                    f"  ↩   {target.name} — kept in review "
+                    f"(run 'libris review-accept --id {queue_pos} --overwrite' to import).",
+                    dim=True,
+                ))
+                click.echo()
+                continue
 
         status = "✅" if record.state == FileState.IMPORTED else "❌"
         click.echo(f"  {status}  {target.name}  [{record.state.value}]")
@@ -1534,11 +1600,64 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                 if selected.candidate.authors:
                     click.echo(f"      Author:  {', '.join(selected.candidate.authors)}")
                 click.echo(f"      Score:   {selected.confidence:.2f} (manually selected)")
+                click.echo()
+                return
+
+            elif (imported_record.state == FileState.REVIEW
+                  and imported_record.error_msg
+                  and imported_record.error_msg.startswith("Duplicate:")):
+                # force_import detected the selected candidate is already in Calibre.
+                # Let the user decide — overwrite, discard, or try a different match.
+                click.echo(click.style(f"  ⚠   {imported_record.error_msg}", fg="yellow"))
+                click.echo()
+                click.echo("  What would you like to do?")
+                click.echo("  [o]  Overwrite — replace the existing Calibre entry")
+                click.echo("  [d]  Discard   — delete this file from the review queue")
+                click.echo("  [r]  Try a different match")
+                click.echo()
+                while True:
+                    dup_choice = click.prompt("  Choice", default="r").strip().lower()
+                    if dup_choice in ("o", "d", "r"):
+                        break
+                    click.echo(click.style("  Please enter o, d, or r.", fg="yellow"))
+
+                if dup_choice == "o":
+                    # import_from_record re-downloads cover using the stored URL
+                    # and retries with duplicate_action="import"
+                    pipeline.config.metadata.duplicate_action = "import"
+                    imported_record = pipeline.import_from_record(imported_record)
+                    if imported_record.state == FileState.IMPORTED:
+                        pipeline._store.cleanup_stale_review(
+                            str(file_path), exclude_id=imported_record.id
+                        )
+                        click.echo(f"  ✅  {selected.candidate.title}")
+                        if selected.candidate.authors:
+                            click.echo(f"      Author:  {', '.join(selected.candidate.authors)}")
+                        click.echo(f"      Score:   {selected.confidence:.2f} (manually selected)")
+                    else:
+                        click.echo(
+                            f"  ❌  Overwrite failed: {imported_record.error_msg}", err=True
+                        )
+                        sys.exit(1)
+                    click.echo()
+                    return
+
+                elif dup_choice == "d":
+                    file_path.unlink(missing_ok=True)
+                    imported_record.state = FileState.IMPORTED
+                    imported_record.error_msg = "Discarded by user (duplicate)"
+                    pipeline._store.upsert(imported_record)
+                    click.echo(f"  🗑   {file_path.name}")
+                    click.echo()
+                    return
+
+                else:  # r — try a different match
+                    click.echo()
+                    continue  # back to rematch loop
+
             else:
                 click.echo(f"  ❌  Import failed: {imported_record.error_msg}", err=True)
                 sys.exit(1)
-            click.echo()
-            return
 
         elif choice == "r":
             continue  # current_query already updated above; clear+redraw

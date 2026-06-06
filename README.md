@@ -426,30 +426,40 @@ incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
 
 This applies whether the files arrive in the same directory drop or at different times, and regardless of `duplicate_action` — format merging always runs.
 
-#### Accepting duplicates
+#### Duplicates stay in the review queue
 
-If the same format already exists in Calibre (e.g. a second EPUB), `review-accept` blocks by default and shows you the exact command to use:
+When Libris detects the same format already exists in Calibre, the file **stays in the review queue** rather than failing. `list-review` marks it with a yellow `[!]` tag so you can see it immediately:
 
 ```
-  ⚠   Brisingr.m4b
-       Already in Calibre — add --overwrite to import anyway:
-       libris review-accept --id 1 --overwrite
+  [2] [!] Blood River.epub
+        ⚠  Duplicate: already in Calibre as EPUB (ID: 21)
+           Accept (overwrite): libris review-accept --id 2 --overwrite
+           Discard:            libris review-discard --id 2
 ```
 
-Use `--overwrite` to replace the existing format in the Calibre record rather than creating a duplicate entry. The cover and metadata are updated at the same time:
+If you run `review-accept` on a file that turns out to be a duplicate (e.g. it was in review for low confidence, not because of duplication), Libris prompts you inline instead of failing:
 
-```bash
-libris review-accept --id 1 --overwrite
 ```
+  ⚠   Blood River.epub
+       Duplicate: already in Calibre as EPUB (ID: 21)
+
+       [o]  Overwrite — replace the existing Calibre entry
+       [d]  Discard   — delete this file from the review queue
+       [r]  Keep      — leave in review (use --overwrite later)
+
+       Choice [r]:
+```
+
+The same prompt appears during `rematch` if the candidate you pick is already in Calibre — you can overwrite, discard, or `[r]` go back and try a different match without losing your place.
 
 With `duplicate_action: import` in your config, the same smart merge happens automatically — same format is replaced in-place, different format is added to the existing record. No second Calibre entry is ever created.
 
-To delete the duplicate instead, use `review-discard`:
+To batch-delete duplicates:
 
 ```bash
-libris review-discard --id 1          # delete this one
-libris review-discard --duplicates    # delete all duplicate-flagged items
-libris review-discard --stale         # remove DB records where the file is already gone
+libris review-discard --duplicates    # delete all [!] items
+libris review-discard --id 2         # delete one
+libris review-discard --stale        # remove DB records where file is already gone
 ```
 
 ---

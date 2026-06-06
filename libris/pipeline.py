@@ -278,12 +278,43 @@ class Pipeline:
                             # fall through — add_book creates a new entry as last resort
 
                     else:
-                        # Same format, no --overwrite: block to prevent a duplicate
-                        raise BookPipelineError(
-                            f"'{result.title}' is already in Calibre as "
-                            f"{incoming_fmt.upper()} (book {dup_ids[0]}). "
-                            "Re-run review-accept with --overwrite to replace it."
+                        # Same format, no --overwrite: flag as duplicate and stay in
+                        # REVIEW.  Do NOT raise BookPipelineError — that would move
+                        # the file to failed/ via _mark_failed.  The CLI detects this
+                        # REVIEW return and offers [o]verwrite / [d]iscard / [r]keep.
+                        id_str = ", ".join(str(i) for i in dup_ids[:3])
+                        id_suffix = (
+                            f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
                         )
+                        record.state = FileState.REVIEW
+                        record.matched_title = result.title
+                        record.matched_author = result.author
+                        record.confidence = result.confidence
+                        record.matched_year = int(result.year) if result.year else None
+                        record.matched_publisher = result.publisher or None
+                        record.matched_isbn = result.isbn
+                        record.matched_cover_url = (
+                            result.best.candidate.cover_url if result.best else None
+                        )
+                        # Store the new candidate JSON so a CLI retry (overwrite)
+                        # uses the freshly resolved metadata, not the old review match.
+                        if result.best:
+                            record.matched_metadata_json = _serialize_candidate(result.best)
+                        record.error_msg = (
+                            f"Duplicate: already in Calibre as {incoming_fmt.upper()} "
+                            f"(ID{'s' if len(dup_ids) > 1 else ''}: "
+                            f"{id_str}{id_suffix})"
+                        )
+                        self._store.upsert(record)
+                        log.info(
+                            "pipeline.force_import_duplicate_blocked",
+                            extra={"book_id": dup_ids[0], "title": result.title},
+                        )
+                        # Clean up cover temp file; CLI retry re-downloads via
+                        # import_from_record using the stored matched_cover_url.
+                        if result.cover_path and result.cover_path.exists():
+                            result.cover_path.unlink(missing_ok=True)
+                        return record
 
             # Embed audio tags before adding to Calibre (cover set via set_cover instead)
             if media_type == MediaType.AUDIOBOOK:
