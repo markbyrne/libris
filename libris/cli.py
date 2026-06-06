@@ -761,6 +761,9 @@ def review_accept(
         target_triples = [(resolved, cached, queue_pos)]
 
     any_failed = False
+    # Items skipped during --accept-all (no match, or duplicate blocked).
+    # IDs are re-resolved after the loop so hints reflect the post-import queue.
+    skipped_items: list[tuple[str, str]] = []  # (filename, current_path)
 
     click.echo()
     for target, cached_record, queue_pos in target_triples:
@@ -771,13 +774,19 @@ def review_accept(
 
         # Block acceptance if no metadata match has been found yet
         if cached_record and not _has_match(cached_record):
-            id_hint = f"--id {queue_pos}" if queue_pos else "--id <N>  (run 'libris list-review' to find ID)"
             click.echo(f"  ⚠   {target.name}")
-            click.echo(click.style(
-                f"       No metadata match yet — find one first:\n"
-                f"       libris rematch {id_hint}",
-                fg="yellow",
-            ))
+            if accept_all:
+                # Don't emit a stale ID — the queue renumbers as items are accepted.
+                # We'll print fresh IDs in the summary below.
+                click.echo(click.style("       No metadata match yet.", fg="yellow"))
+                skipped_items.append((target.name, str(target)))
+            else:
+                id_hint = f"--id {queue_pos}" if queue_pos else "--id <N>  (run 'libris list-review' to find ID)"
+                click.echo(click.style(
+                    f"       No metadata match yet — find one first:\n"
+                    f"       libris rematch {id_hint}",
+                    fg="yellow",
+                ))
             click.echo()
             any_failed = True
             continue
@@ -789,13 +798,20 @@ def review_accept(
             and cached_record.error_msg.startswith("Duplicate:")
         )
         if is_duplicate and not overwrite:
-            id_hint = f"--id {queue_pos}" if queue_pos else ""
             click.echo(f"  ⚠   {target.name}")
-            click.echo(click.style(
-                f"       Already in Calibre — add --overwrite to import anyway:\n"
-                f"       libris review-accept {id_hint} --overwrite",
-                fg="yellow",
-            ))
+            if accept_all:
+                click.echo(click.style(
+                    "       Already in Calibre — skipped. Use --overwrite to import anyway.",
+                    fg="yellow",
+                ))
+                skipped_items.append((target.name, str(target)))
+            else:
+                id_hint = f"--id {queue_pos}" if queue_pos else ""
+                click.echo(click.style(
+                    f"       Already in Calibre — add --overwrite to import anyway:\n"
+                    f"       libris review-accept {id_hint} --overwrite",
+                    fg="yellow",
+                ))
             click.echo()
             any_failed = True
             continue
@@ -829,6 +845,27 @@ def review_accept(
             click.echo(f"       Error:   {record.error_msg}", err=True)
             any_failed = True
         click.echo()
+
+    # After --accept-all, re-query the queue for fresh IDs and show a tidy
+    # summary of anything that still needs attention.
+    if accept_all and skipped_items:
+        fresh_store = StateStore(config.paths.state_db)
+        fresh_records, _ = _live_review_records(fresh_store)
+        fresh_store.close()
+
+        click.echo(_hr())
+        click.echo(f"  {len(skipped_items)} item(s) still need attention:\n")
+        for name, path_str in skipped_items:
+            pos = next(
+                (i for i, r in enumerate(fresh_records, 1) if r.current_path == path_str),
+                None,
+            )
+            click.echo(f"  [{pos or '?'}]  {name}")
+            if pos:
+                click.echo(click.style(f"       libris rematch --id {pos}", dim=True))
+            else:
+                click.echo(click.style("       libris list-review  (to find current ID)", dim=True))
+            click.echo()
 
     sys.exit(1 if any_failed else 0)
 
