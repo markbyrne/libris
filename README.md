@@ -414,9 +414,21 @@ libris review-accept --accept-all
 libris review-accept "/books/review/Caliban and the Witch.epub"
 ```
 
+#### Format merging
+
+If a file arrives that matches a book already in Calibre **but in a different format**, it is automatically added as a new format to the existing record — no review, no duplicate warning. A single Calibre book record will then hold both files.
+
+```
+incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
+                        →  calibredb add_format 42 Eragon.epub  ✅
+                        →  Calibre book 42 now has: EPUB + M4B
+```
+
+This applies whether the files arrive in the same directory drop or at different times.
+
 #### Accepting duplicates
 
-If the file was flagged as a duplicate of an existing Calibre book, `review-accept` blocks by default and shows you the exact command to use:
+If the same format already exists in Calibre (e.g. a second EPUB), `review-accept` blocks by default and shows you the exact command to use:
 
 ```
   ⚠   Brisingr.m4b

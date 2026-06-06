@@ -22,7 +22,7 @@ from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
 from .base import CalibreBackend
-from .local import _BOOK_EXTENSIONS, _metadata_flags, _parse_book_id
+from .local import _BOOK_EXTENSIONS, _metadata_flags, _parse_book_id, _parse_formats
 
 log = logging.getLogger(__name__)
 
@@ -171,6 +171,32 @@ class DockerCalibre(CalibreBackend):
         except ValueError:
             log.warning("calibre.docker.search_parse_failed", extra={"raw": raw})
             return []
+
+    def add_format(self, book_id: int, file_path: Path) -> None:
+        container_path = self._translate(file_path)
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "add_format",
+            str(book_id),
+            container_path,
+        ]
+        log.debug("calibre.docker.add_format", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"docker calibredb add_format failed (rc={result.returncode}): {result.stderr.strip()}"
+            )
+        log.info("calibre.docker.format_added", extra={"book_id": book_id, "file": str(file_path)})
+
+    def get_formats(self, book_id: int) -> set[str]:
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "list",
+            "--search", f"id:{book_id}",
+            "--fields", "formats",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return _parse_formats(result.stdout)
 
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         container_input = self._translate(input_path)

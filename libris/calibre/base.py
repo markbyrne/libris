@@ -88,3 +88,24 @@ class CalibreBackend(ABC):
         Returns an empty list on no match or any error.
         """
         ...
+
+    @abstractmethod
+    def add_format(self, book_id: int, file_path: Path) -> None:
+        """Add a new format file to an existing Calibre book record.
+
+        Uses `calibredb add_format`.  Replaces the existing format if one with
+        the same extension is already stored (Calibre's default behaviour).
+
+        Raises:
+            CalibreImportError: If calibredb exits with a non-zero code.
+        """
+        ...
+
+    @abstractmethod
+    def get_formats(self, book_id: int) -> set[str]:
+        """Return the set of format extensions stored for a Calibre book.
+
+        Extensions are lowercase without a leading dot, e.g. {"epub", "m4b"}.
+        Returns an empty set on any error so callers can treat it as "unknown".
+        """
+        ...

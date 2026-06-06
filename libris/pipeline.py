@@ -856,6 +856,11 @@ class Pipeline:
     ) -> Optional[FileRecord]:
         """Check for duplicates and act on them per config.
 
+        If the incoming file's format is not already stored in the matching
+        Calibre book, it is added as a new format to that record regardless
+        of duplicate_action — so an EPUB and M4B of the same book end up
+        in one Calibre entry.
+
         Returns a FileRecord if the duplicate was handled (caller should return
         it immediately); returns None to continue with normal import.
         """
@@ -867,6 +872,43 @@ class Pipeline:
         if not dup_ids:
             return None
 
+        # ── Format-merge check ────────────────────────────────────────
+        # If the incoming format isn't already in the matched Calibre book,
+        # add it there rather than treating it as a duplicate.
+        incoming_fmt = file_path.suffix.lstrip(".").lower()
+        try:
+            existing_formats = self._calibre.get_formats(dup_ids[0])
+        except Exception as exc:
+            log.warning("pipeline.get_formats_failed: %s", exc)
+            existing_formats = set()
+
+        if incoming_fmt not in existing_formats:
+            try:
+                self._calibre.add_format(dup_ids[0], file_path)
+                file_path.unlink(missing_ok=True)
+                if result.cover_path:
+                    result.cover_path.unlink(missing_ok=True)
+                record.state = FileState.IMPORTED
+                record.calibre_book_id = dup_ids[0]
+                record.matched_title = result.title
+                record.matched_author = result.author
+                record.confidence = result.confidence
+                record.error_msg = f"Added {incoming_fmt.upper()} format to Calibre book {dup_ids[0]}"
+                self._store.upsert(record)
+                log.info(
+                    "pipeline.format_merged",
+                    extra={
+                        "title": result.title,
+                        "format": incoming_fmt,
+                        "book_id": dup_ids[0],
+                    },
+                )
+                return record
+            except Exception as exc:
+                log.warning("pipeline.add_format_failed: %s", exc)
+                # Fall through to normal duplicate handling
+
+        # ── Same format already in Calibre — apply duplicate_action ───
         id_str = ", ".join(str(i) for i in dup_ids[:3])
         suffix = f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
         dup_msg = f"Duplicate: already in Calibre (ID{'s' if len(dup_ids) > 1 else ''}: {id_str}{suffix})"

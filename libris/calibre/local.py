@@ -132,6 +132,31 @@ class LocalCalibre(CalibreBackend):
             log.warning("calibre.local.search_parse_failed", extra={"raw": raw})
             return []
 
+    def add_format(self, book_id: int, file_path: Path) -> None:
+        cmd = [
+            "calibredb", "add_format",
+            str(book_id),
+            str(file_path),
+            "--with-library", str(self._library),
+        ]
+        log.debug("calibre.local.add_format", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"calibredb add_format failed (rc={result.returncode}): {result.stderr.strip()}"
+            )
+        log.info("calibre.local.format_added", extra={"book_id": book_id, "file": str(file_path)})
+
+    def get_formats(self, book_id: int) -> set[str]:
+        cmd = [
+            "calibredb", "list",
+            "--search", f"id:{book_id}",
+            "--fields", "formats",
+            "--with-library", str(self._library),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return _parse_formats(result.stdout)
+
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         cmd = ["ebook-convert", str(input_path), str(output_path)]
         log.debug("calibre.local.convert", extra={"cmd": cmd})
@@ -173,6 +198,16 @@ def _metadata_flags(result: MetadataResult) -> list[list[str]]:
     if result.series_index is not None:
         flags.append(["--field", f"series_index:{result.series_index}"])
     return flags
+
+
+def _parse_formats(stdout: str) -> set[str]:
+    """Extract lowercase format extensions from calibredb list --fields formats output.
+
+    calibredb output varies: extensions appear as bare filenames or in a
+    Python-list repr.  A simple regex over all dot-extensions is robust to both.
+    """
+    import re
+    return {ext.lower() for ext in re.findall(r"\.([a-z0-9]{2,5})\b", stdout, re.IGNORECASE)}
 
 
 def _parse_book_id(stdout: str) -> int:
