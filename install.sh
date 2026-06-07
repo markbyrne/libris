@@ -170,6 +170,8 @@ elif [[ "$PLATFORM" == "linux" ]]; then
             else
                 warn "Neither wget nor curl found — install Calibre manually from https://calibre-ebook.com/download_linux"
             fi
+            # Add Calibre to PATH for the rest of this session
+            export PATH="$PATH:/opt/calibre"
             if check_cmd calibredb; then
                 success "Calibre installed"
             else
@@ -224,7 +226,7 @@ else
     fi
 
     if [[ -n "$GITHUB_TOKEN" ]]; then
-        INSTALL_TARGET="git+https://__token__:${GITHUB_TOKEN}@github.com/markbyrne/libris@${LIBRIS_VERSION}"
+        INSTALL_TARGET="git+https://x-access-token:${GITHUB_TOKEN}@github.com/markbyrne/libris@${LIBRIS_VERSION}"
     else
         INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
     fi
