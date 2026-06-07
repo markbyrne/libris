@@ -159,7 +159,27 @@ elif [[ "$PLATFORM" == "linux" ]]; then
     check_cmd inotifywait || MISSING+=("inotify-tools")
     check_cmd ffmpeg       || MISSING+=("ffmpeg")
     if ! check_cmd calibredb; then
-        warn "calibredb not found. Install Calibre from https://calibre-ebook.com/download_linux"
+        warn "calibredb not found."
+        echo ""
+        echo "  Calibre is not available via apt — it must be installed from calibre-ebook.com."
+        if ask_yn "Install Calibre now? (uses the official Calibre installer)" "y"; then
+            if command -v wget &>/dev/null; then
+                sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+            elif command -v curl &>/dev/null; then
+                sudo -v && curl -fsSL https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+            else
+                warn "Neither wget nor curl found — install Calibre manually from https://calibre-ebook.com/download_linux"
+            fi
+            if check_cmd calibredb; then
+                success "Calibre installed"
+            else
+                warn "calibredb still not found — you may need to add Calibre to PATH."
+                warn "Typically: export PATH=\"\$PATH:/opt/calibre\""
+            fi
+        else
+            warn "Skipping Calibre install. Add calibredb to PATH before running libris."
+        fi
+        echo ""
     fi
 
     if [[ ${#MISSING[@]} -gt 0 ]]; then
@@ -184,8 +204,31 @@ if [[ "$INSTALL_MODE" == "local" ]]; then
     info "Installing libris from local source…"
     INSTALL_TARGET="."
 else
+    # ── Private repo token check ──────────────────────────────────────────────
+    # This block is only needed while libris is a private repo during alpha/beta
+    # testing. Once the repo is made public, this check will always pass and the
+    # token prompt will never appear. It can be removed at that point.
+    GITHUB_TOKEN=""
+    REPO_URL="https://api.github.com/repos/markbyrne/libris"
+    if ! curl -fsSL "$REPO_URL" &>/dev/null; then
+        echo ""
+        warn "The libris repository is private — a GitHub token is required to install."
+        echo "  Generate one at: GitHub → Settings → Developer settings → Personal access tokens"
+        echo "  Required scope: repo (read) — or use a fine-grained token with Contents: read"
+        echo ""
+        GITHUB_TOKEN="$(ask_secret "GitHub personal access token")"
+        if [[ -z "$GITHUB_TOKEN" ]]; then
+            error "No token provided — cannot install from private repo."
+            exit 1
+        fi
+    fi
+
+    if [[ -n "$GITHUB_TOKEN" ]]; then
+        INSTALL_TARGET="git+https://__token__:${GITHUB_TOKEN}@github.com/markbyrne/libris@${LIBRIS_VERSION}"
+    else
+        INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
+    fi
     info "Installing libris ${LIBRIS_VERSION} from GitHub…"
-    INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
 fi
 
 # Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
