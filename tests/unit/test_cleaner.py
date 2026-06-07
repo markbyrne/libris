@@ -2,7 +2,7 @@
 
 import pytest
 
-from libris.cleaner import clean_query, extract_isbn, extract_part, strip_part_marker
+from libris.cleaner import clean_query, extract_isbn, extract_part, is_chaff, strip_part_marker
 
 
 @pytest.mark.parametrize("raw,expected_contains,expected_not_contains", [
@@ -105,6 +105,35 @@ def test_extract_part(raw, expected):
 ])
 def test_strip_part_marker(raw, expected):
     assert strip_part_marker(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# is_chaff
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("filename,expected", [
+    # ── Should be flagged as chaff ────────────────────────────────────────
+    ("Read Me!.epub",                 True),
+    ("readme.epub",                   True),
+    ("README.epub",                   True),
+    ("Downloaded from piracy.epub",   True),
+    ("www.example.com.epub",          True),
+    ("license.epub",                  True),
+    ("sample.m4b",                    True),
+    ("a.epub",                        True),   # stem too short
+    ("1.m4b",                         True),   # stem too short
+    ("cover.jpg",                     True),   # chaff extension
+    ("nfo.epub",                      True),   # exact stem match
+    ("info.txt",                      True),   # txt extension
+    # ── Should NOT be flagged ─────────────────────────────────────────────
+    ("Project Hail Mary.epub",        False),
+    ("Dune.m4b",                      False),
+    ("The Martian.mp3",               False),
+    ("Blood River.epub",              False),
+    ("readme-notes.epub",             False),   # stem starts with readme but longer
+])
+def test_is_chaff(filename, expected):
+    assert is_chaff(filename) == expected
 
 
 @pytest.mark.parametrize("raw,expected_isbn", [

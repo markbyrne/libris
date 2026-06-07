@@ -485,10 +485,11 @@ The same prompt appears during `rematch` if the candidate you pick is already in
 
 With `duplicate_action: import` in your config, the same smart merge happens automatically — same format is replaced in-place, different format is added to the existing record. No second Calibre entry is ever created.
 
-To batch-delete duplicates:
+To batch-delete duplicates or chaff:
 
 ```bash
 libris review-discard --duplicates    # delete all [!] items
+libris review-discard --chaff         # delete known-clutter files (Read Me!, NFO, etc.)
 libris review-discard --id 2         # delete one
 libris review-discard --stale        # remove DB records where file is already gone
 ```
@@ -557,7 +558,9 @@ You'll see the current match and a query prompt. The most effective format is `T
 
 ### `recover` — move failed files back to review
 
-Files that fail processing (e.g. due to a network error or rate limit) are moved to `failed/`. Use `recover` to return them to `review/` so they can be rematched and imported.
+Files that fail processing (e.g. due to a network error, rate limit, or chaff detection) are moved to `failed/`. Use `recover` to return them to `review/` so they can be rematched and imported.
+
+**Chaff detection:** Files with known non-book filenames (`Read Me!.epub`, `Downloaded from….epub`, `*.txt`, `*.nfo`, etc.) are automatically rejected and moved to `failed/` before any API call is made. If a file was incorrectly flagged, use `libris recover --id N` to move it back to review.
 
 ```bash
 # List failed files

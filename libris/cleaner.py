@@ -1,4 +1,4 @@
-"""Filename noise stripping for metadata query generation.
+"""Filename noise stripping, chaff detection, and multi-part helpers.
 
 Converts a raw filename like:
   "Project Hail Mary (Unabridged) [MP3 320kbps] Part 1 of 2 - Andy Weir (2021).mp3"
@@ -18,7 +18,81 @@ arrive before combining and importing.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Chaff detection
+# ---------------------------------------------------------------------------
+
+# Filenames (stem, lowercased) that are definitively not real books
+_CHAFF_EXACT: frozenset[str] = frozenset({
+    "read me", "readme", "read_me", "readthis",
+    "license", "licence", "copying",
+    "credits", "credit", "nfo",
+    "sample", "preview", "demo",
+    "cover", "cover art", "coverart", "folder",
+    "info", "description", "about",
+})
+
+# Stem prefixes (lowercased) that indicate system/download clutter
+_CHAFF_PREFIXES: tuple[str, ...] = (
+    "downloaded from",
+    "www.",
+    "http",
+    "[req]",
+    "[request]",
+    "req -",
+)
+
+# Extensions that are never real books even if the classifier would accept them
+# (e.g. txt is in EBOOK_EXTENSIONS but almost never a real book when downloaded)
+_CHAFF_EXTENSIONS: frozenset[str] = frozenset({
+    "txt", "nfo", "url", "htm", "html",
+    "jpg", "jpeg", "png", "gif", "bmp", "webp",
+    "exe", "zip", "rar", "7z", "torrent",
+    "srt", "sub", "ass",  # subtitle files
+})
+
+# Stems that are at most this many characters are almost certainly not books
+_CHAFF_SHORT_STEM = 2
+
+
+def is_chaff(filename: str) -> bool:
+    """Return True if *filename* looks like clutter rather than a real book.
+
+    Checks extension, stem length, known exact names, and known bad prefixes.
+    False positives can be recovered with 'libris recover --id N'.
+
+    Args:
+        filename: Basename only (e.g. "Read Me!.epub"), not a full path.
+    """
+    p = Path(filename)
+    ext = p.suffix.lstrip(".").lower()
+    stem = p.stem.strip().lower()
+
+    if ext in _CHAFF_EXTENSIONS:
+        return True
+
+    # Very short stems: "a.epub", "1.epub" — not real books
+    if len(stem) <= _CHAFF_SHORT_STEM:
+        return True
+
+    # Normalise: strip trailing and leading punctuation/symbols for exact matching
+    # "Read Me!" → "read me", "nfo!" → "nfo"
+    stem_clean = re.sub(r"[^a-z0-9\s]+", " ", stem).strip()
+    stem_clean = re.sub(r"\s+", " ", stem_clean)
+
+    if stem_clean in _CHAFF_EXACT or stem in _CHAFF_EXACT:
+        return True
+
+    # Normalize stem for prefix matching (strip leading punctuation/brackets)
+    stem_norm = re.sub(r"^[\[\(!\s]+", "", stem)
+    if any(stem_norm.startswith(pfx) for pfx in _CHAFF_PREFIXES):
+        return True
+
+    return False
 
 
 # Ordered list of (pattern, replacement) substitutions applied sequentially.
