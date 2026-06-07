@@ -35,7 +35,7 @@ import click
 import httpx
 
 from .calibre import get_calibre
-from .cleaner import clean_query as _clean_query, strip_part_marker as _strip_part_marker
+from .cleaner import clean_query as _clean_query, is_chaff as _is_chaff, strip_part_marker as _strip_part_marker
 from .config import load_config
 from .exceptions import ConfigError, RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
@@ -643,6 +643,8 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
               help="Discard by review queue position (from 'libris list-review')")
 @click.option("--duplicates", "duplicates_only", is_flag=True, default=False,
               help="Discard all items flagged as duplicates")
+@click.option("--chaff", "discard_chaff", is_flag=True, default=False,
+              help="Discard all items whose filenames match known chaff patterns")
 @click.option("--all", "discard_all", is_flag=True, default=False,
               help="Discard every item in the review queue")
 @click.option("--stale", "discard_stale", is_flag=True, default=False,
@@ -651,6 +653,7 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
 def review_discard(
     review_id: Optional[int],
     duplicates_only: bool,
+    discard_chaff: bool,
     discard_all: bool,
     discard_stale: bool,
     config_path: Optional[Path],
@@ -658,26 +661,27 @@ def review_discard(
     """Delete a review-queue file and remove it from the queue.
 
     The file is permanently deleted from disk and the record is marked so it
-    won't be re-imported by a future scan.  Use this to clean up duplicates
-    or files you simply don't want in your library.
+    won't be re-imported by a future scan.  Use this to clean up duplicates,
+    chaff, or files you simply don't want in your library.
 
     \b
       libris review-discard --id 1           # discard one item
       libris review-discard --duplicates     # discard all detected duplicates
+      libris review-discard --chaff          # discard all known-clutter files
       libris review-discard --stale          # remove records where the file is already gone
       libris review-discard --all            # discard every item in review
     """
     path = _resolve_config(config_path)
     config = load_config(path)
 
-    n_flags = sum([review_id is not None, duplicates_only, discard_all, discard_stale])
+    n_flags = sum([review_id is not None, duplicates_only, discard_chaff, discard_all, discard_stale])
     if n_flags == 0:
         _die(
-            "Provide one of: --id <N>, --duplicates, --stale, or --all\n"
+            "Provide one of: --id <N>, --duplicates, --chaff, --stale, or --all\n"
             "  Run 'libris list-review' to see queued files and their IDs."
         )
     if n_flags > 1:
-        _die("Only one of --id, --duplicates, --stale, or --all may be used at a time.")
+        _die("Only one of --id, --duplicates, --chaff, --stale, or --all may be used at a time.")
 
     store = _open_store(config.paths.state_db)
 
@@ -706,6 +710,31 @@ def review_discard(
     if not records:
         store.close()
         click.echo("\n  No files in review queue.\n")
+        return
+
+    # --chaff: discard items whose filenames match known clutter patterns
+    if discard_chaff:
+        targets = [
+            (i, r) for i, r in enumerate(records, 1)
+            if _is_chaff(Path(r.current_path).name)
+        ]
+        if not targets:
+            store.close()
+            click.echo("\n  No chaff items found in review queue.\n")
+            return
+        click.echo()
+        for queue_pos, record in targets:
+            file_path = Path(record.current_path)
+            try:
+                file_path.unlink(missing_ok=True)
+                record.state = FileState.IMPORTED
+                record.error_msg = f"Discarded as chaff by user (was in review/{file_path.name})"
+                store.upsert(record)
+                click.echo(f"  🗑   [{queue_pos}] {file_path.name}  (chaff)")
+            except Exception as exc:
+                click.echo(click.style(f"  ❌  [{queue_pos}] {file_path.name}: {exc}", fg="red"), err=True)
+        store.close()
+        click.echo()
         return
 
     # Determine target records
