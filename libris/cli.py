@@ -35,7 +35,7 @@ import click
 import httpx
 
 from .calibre import get_calibre
-from .cleaner import clean_query as _clean_query
+from .cleaner import clean_query as _clean_query, strip_part_marker as _strip_part_marker
 from .config import load_config
 from .exceptions import ConfigError, RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
@@ -528,6 +528,9 @@ def list_review(config_path: Optional[Path]) -> None:
     click.echo("  Preview cover:   libris show-cover --id <N>")
     click.echo("  Discard:         libris review-discard --id <N>")
     click.echo("  Discard dupes:   libris review-discard --duplicates")
+    has_audio = any(r.media_type == "audiobook" for r in records)
+    if has_audio:
+        click.echo("  Mark as part:    libris mark-as-part --id <N> --part <num> --total <total>")
     if stale_count:
         click.echo()
         click.echo(click.style(
@@ -1206,6 +1209,140 @@ def list_pending(config_path: Optional[Path]) -> None:
     click.echo(_hr())
     click.echo("  Force-combine:  libris combine-parts --id <N>")
     click.echo("  Combine all:    libris combine-parts --all")
+    click.echo()
+
+
+@main.command("mark-as-part")
+@click.option("--id", "review_id", required=True, type=int,
+              help="Review queue position (from 'libris list-review')")
+@click.option("--part", "part_num", required=True, type=int,
+              help="Part number for this file (e.g. 1, 2, 3)")
+@click.option("--total", "total_parts", default=None, type=int,
+              help="Total number of parts expected (triggers auto-combine when all arrive)")
+@click.option("--group", "group_name", default=None,
+              help="Override the group name (default: derived from filename)")
+@_CONFIG_OPTION
+def mark_as_part(
+    review_id: int,
+    part_num: int,
+    total_parts: Optional[int],
+    group_name: Optional[str],
+    config_path: Optional[Path],
+) -> None:
+    """Flag a review-queue audiobook as part N of a multi-part set.
+
+    Moves the file from review/ to staging/pending/ and registers it with the
+    part-grouping system.  When all parts are present the set is automatically
+    combined and imported.
+
+    \b
+      libris mark-as-part --id 1 --part 1 --total 2
+      libris mark-as-part --id 2 --part 2 --total 2
+      libris mark-as-part --id 3 --part 1 --group "Eragon"   # manual group name
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+
+    store = _open_store(config.paths.state_db)
+    records, _ = _live_review_records(store)
+
+    if not records:
+        store.close()
+        click.echo("\n  No files in review queue.\n")
+        return
+
+    if review_id < 1 or review_id > len(records):
+        store.close()
+        _die(
+            f"ID {review_id} out of range — queue has {len(records)} item(s).\n"
+            "  Run 'libris list-review' to see current IDs."
+        )
+
+    record = records[review_id - 1]
+    file_path = Path(record.current_path)
+
+    if record.media_type != "audiobook":
+        store.close()
+        _die(
+            f"[{review_id}] {file_path.name} is not an audiobook — mark-as-part only applies to audio files."
+        )
+
+    if not file_path.exists():
+        store.close()
+        _die(f"File not found: {file_path}")
+
+    # Determine group key
+    if group_name:
+        key = group_name.strip().lower()
+    else:
+        key = (_strip_part_marker(file_path.stem) or file_path.stem).lower().strip()
+
+    # Stage the file into staging/pending/
+    pending_dir = config.paths.staging_dir / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    dest = pending_dir / file_path.name
+    if dest.exists():
+        dest = pending_dir / f"{file_path.stem}_part{part_num}{file_path.suffix}"
+    shutil.move(str(file_path), str(dest))
+
+    record.part_num = part_num
+    record.total_parts = total_parts
+    record.part_group_key = key
+    record.current_path = str(dest)
+    record.state = FileState.PENDING_PARTS
+    store.upsert(record)
+
+    total_str = f" of {total_parts}" if total_parts else ""
+    click.echo()
+    click.echo(f"  ✅  [{review_id}] {file_path.name}")
+    click.echo(f"       Part:   {part_num}{total_str}")
+    click.echo(f"       Group:  {key}")
+    click.echo(f"       →  staging/pending/{dest.name}")
+
+    # Auto-combine if we now have the complete set
+    n_received = 0
+    if total_parts is not None:
+        group_records = store.list_pending_group(key)
+        received = {
+            r.part_num for r in group_records
+            if r.part_num is not None and Path(r.current_path).exists()
+        }
+        n_received = len(received)
+        expected = set(range(1, total_parts + 1))
+        if received >= expected:
+            click.echo()
+            click.echo(f"  All {total_parts} parts present — combining…")
+            live_records = [
+                r for r in group_records if Path(r.current_path).exists()
+            ]
+            store.close()
+            pipeline = Pipeline(config)
+            result_record = pipeline._combine_pending_group(key, live_records)
+            if result_record.state == FileState.IMPORTED:
+                click.echo(click.style(
+                    f"  ✅  Combined and imported: {result_record.matched_title or key}",
+                    fg="green",
+                ))
+            else:
+                click.echo(f"  🔍  Combined → review/  (run 'libris list-review')")
+            click.echo()
+            return
+
+    store.close()
+
+    if total_parts is not None:
+        remaining = total_parts - n_received
+        if remaining > 0:
+            click.echo(click.style(
+                f"       Waiting for {remaining} more part(s) — run 'libris list-pending' to check.",
+                dim=True,
+            ))
+    else:
+        click.echo(click.style(
+            "       No total given — run 'libris combine-parts' when all parts are staged.",
+            dim=True,
+        ))
     click.echo()
 
 
