@@ -267,7 +267,6 @@ else
             exit 1
         fi
         debug "token length after trim: ${#GITHUB_TOKEN} chars"
-        debug "token prefix: ${GITHUB_TOKEN:0:6}... (first 6 chars only)"
         debug "curl version: $(curl --version 2>&1 | head -1)"
         debug "git version:  $(git --version 2>&1)"
 
@@ -281,7 +280,7 @@ else
         if command -v curl &>/dev/null; then
             debug "attempting curl download via --config stdin…"
             CURL_CONFIG="$(printf 'header = "Authorization: token %s"\n' "$GITHUB_TOKEN")"
-            debug "curl config line (masked): header = \"Authorization: token ${GITHUB_TOKEN:0:6}...\""
+            debug "curl config line: header = \"Authorization: token [REDACTED]\""
             CURL_EXIT=0
             printf '%s\n' "$CURL_CONFIG" \
                 | curl --fail --silent --show-error --location \
