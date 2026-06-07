@@ -780,6 +780,15 @@ class Pipeline:
         record.matched_author = result.author
         record.confidence = result.confidence
 
+        # ── Cross-format merge (runs before threshold gate) ───────────
+        # If a different format of this book is already in Calibre, add this
+        # file as a new format immediately — no review needed, regardless of
+        # confidence score.  Same-format duplicates fall through to the normal
+        # threshold → _handle_duplicate flow below.
+        merge_record = self._try_cross_format_merge(record, result, m4b_path)
+        if merge_record is not None:
+            return merge_record
+
         if not result.above_threshold:
             log.info(
                 "pipeline.audio.low_confidence",
@@ -787,7 +796,7 @@ class Pipeline:
             )
             return self._mark_review(record, result, m4b_path)
 
-        # ── Duplicate check ───────────────────────────────────────────
+        # ── Duplicate check (same format, above threshold) ────────────
         dup_record = self._handle_duplicate(record, result, m4b_path)
         if dup_record is not None:
             return dup_record
@@ -883,6 +892,17 @@ class Pipeline:
         # we must clean up the original source ourselves in the non-import paths.
         converted = book_path != path
 
+        # ── Cross-format merge (runs before threshold gate) ───────────
+        # If a different format of this book is already in Calibre, add this
+        # file as a new format immediately — no review needed, regardless of
+        # confidence score.  Same-format duplicates fall through to the normal
+        # threshold → _handle_duplicate flow below.
+        merge_record = self._try_cross_format_merge(record, result, book_path)
+        if merge_record is not None:
+            if converted:
+                path.unlink(missing_ok=True)  # clean up original PDF/MOBI/etc.
+            return merge_record
+
         if not result.above_threshold:
             log.info(
                 "pipeline.ebook.low_confidence",
@@ -893,7 +913,7 @@ class Pipeline:
                 path.unlink(missing_ok=True)  # delete original PDF/MOBI/etc. from incoming/
             return record
 
-        # ── Duplicate check ───────────────────────────────────────────
+        # ── Duplicate check (same format, above threshold) ────────────
         dup_record = self._handle_duplicate(record, result, book_path)
         if dup_record is not None:
             if converted:
@@ -1018,24 +1038,96 @@ class Pipeline:
             log.warning("pipeline.duplicate_check_failed: %s", exc)
             return []
 
+    def _try_cross_format_merge(
+        self,
+        record: FileRecord,
+        result: MetadataResult,
+        file_path: Path,
+    ) -> Optional[FileRecord]:
+        """If an existing Calibre book matches by title+author but holds a *different*
+        format from the incoming file, add the incoming file as a new format and
+        return the updated FileRecord.  Returns None when no merge applies (no
+        Calibre match, same format already present, mock_mode, or no metadata).
+
+        Called **before** the confidence-threshold gate so that cross-format pairs
+        (e.g. an EPUB and an M4B of the same book) are always merged automatically,
+        regardless of the incoming file's confidence score.  Same-format duplicates
+        are left for ``_handle_duplicate`` to handle under the normal threshold flow.
+        """
+        if self.config.metadata.mock_mode or not result.title:
+            return None
+
+        dup_ids = self._find_calibre_duplicates(result.title, result.author)
+        if not dup_ids:
+            return None
+
+        incoming_fmt = file_path.suffix.lstrip(".").lower()
+        try:
+            existing_formats = self._calibre.get_formats(dup_ids[0])
+        except Exception as exc:
+            log.warning("pipeline.get_formats_failed: %s", exc)
+            # Can't determine existing formats — fall through to normal flow
+            return None
+
+        if incoming_fmt in existing_formats:
+            # Same format already in Calibre — leave for _handle_duplicate
+            return None
+
+        # Different format: merge into the existing Calibre record now, before
+        # the confidence gate, so the user never has to manually review-accept
+        # a file whose only "problem" is that it's a new format for a known book.
+        try:
+            self._calibre.add_format(dup_ids[0], file_path)
+            file_path.unlink(missing_ok=True)
+            if self.config.output.embed_cover_art and result.cover_path:
+                self._calibre.set_cover(dup_ids[0], result.cover_path)
+            self._calibre.set_metadata(dup_ids[0], result)
+            if result.cover_path:
+                result.cover_path.unlink(missing_ok=True)
+            record.state = FileState.IMPORTED
+            record.calibre_book_id = dup_ids[0]
+            record.matched_title = result.title
+            record.matched_author = result.author
+            record.confidence = result.confidence
+            record.error_msg = (
+                f"Added {incoming_fmt.upper()} format to Calibre book {dup_ids[0]}"
+            )
+            self._store.upsert(record)
+            log.info(
+                "pipeline.cross_format_merged",
+                extra={
+                    "title": result.title,
+                    "format": incoming_fmt,
+                    "book_id": dup_ids[0],
+                    "confidence": result.confidence,
+                },
+            )
+            return record
+        except Exception as exc:
+            log.warning("pipeline.cross_format_merge_failed: %s", exc)
+            return None  # fall through to normal threshold flow
+
     def _handle_duplicate(
         self,
         record: FileRecord,
         result: MetadataResult,
         file_path: Path,
     ) -> Optional[FileRecord]:
-        """Check for duplicates and act on them per config.
+        """Handle a same-format duplicate detected after the confidence threshold is met.
 
-        If the incoming file's format is not already stored in the matching
-        Calibre book, it is added as a new format to that record regardless
-        of duplicate_action — so an EPUB and M4B of the same book end up
-        in one Calibre entry.
+        By the time this is called, ``_try_cross_format_merge`` has already run and
+        returned early for any cross-format case (EPUB + M4B, etc.).  This method
+        therefore only encounters files whose format already exists in the matching
+        Calibre record.  It applies ``duplicate_action`` accordingly:
 
-        When the same format already exists:
           import  → replace the existing format + update metadata (never creates
                     a second Calibre entry)
           skip    → discard the file silently
           review  → move to review/ so the user can decide
+
+        The cross-format merge fallback block below is retained as a defensive
+        safety net (e.g. if this method is called from a path that skips
+        ``_try_cross_format_merge``, or if ``get_formats`` failed earlier).
 
         Returns a FileRecord if the duplicate was handled (caller should return
         it immediately); returns None to continue with normal import.
@@ -1048,9 +1140,11 @@ class Pipeline:
         if not dup_ids:
             return None
 
-        # ── Format-merge check ────────────────────────────────────────
-        # If the incoming format isn't already in the matched Calibre book,
-        # add it there rather than treating it as a duplicate.
+        # ── Format-merge fallback (defensive) ────────────────────────
+        # _try_cross_format_merge already handled this case before the
+        # threshold gate.  This block fires only as a safety net (e.g. if
+        # get_formats failed in _try_cross_format_merge and returned None,
+        # letting the file through to here above threshold).
         incoming_fmt = file_path.suffix.lstrip(".").lower()
         try:
             existing_formats = self._calibre.get_formats(dup_ids[0])
@@ -1059,9 +1153,8 @@ class Pipeline:
             existing_formats = set()
 
         if incoming_fmt not in existing_formats:
-            # Different format: merge into the existing record regardless of
-            # duplicate_action.  Also refresh cover + metadata on the existing
-            # record so it benefits from the freshly resolved API data.
+            # Different format — merge as a safety net (should normally be
+            # handled by _try_cross_format_merge before reaching this point).
             try:
                 self._calibre.add_format(dup_ids[0], file_path)
                 file_path.unlink(missing_ok=True)

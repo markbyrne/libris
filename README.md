@@ -418,7 +418,7 @@ libris review-accept "/books/review/Caliban and the Witch.epub"
 
 #### Format merging
 
-If a file arrives that matches a book already in Calibre **but in a different format**, it is automatically added as a new format to the existing record — no review, no duplicate warning. A single Calibre book record will then hold both files. The existing record's cover and metadata are also refreshed with the freshly resolved API data.
+If a file arrives that matches a book already in Calibre **but in a different format**, it is automatically added as a new format to the existing record — no review, no duplicate warning, no confidence threshold required. A single Calibre book record will then hold both files. The existing record's cover and metadata are also refreshed with the freshly resolved API data.
 
 ```
 incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
@@ -426,11 +426,11 @@ incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
                         →  Calibre book 42 now has: EPUB + M4B
 ```
 
-This applies whether the files arrive in the same directory drop or at different times, and regardless of `duplicate_action` — format merging always runs.
+This applies whether the files arrive in the same directory drop or at different times, and regardless of `duplicate_action` or the incoming file's confidence score — **only same-format files are ever held for review**.
 
-#### Duplicates stay in the review queue
+#### Same-format duplicates stay in the review queue
 
-When Libris detects the same format already exists in Calibre, the file **stays in the review queue** rather than failing. `list-review` marks it with a yellow `[!]` tag so you can see it immediately:
+When Libris detects the **same format** already exists in Calibre, the file **stays in the review queue** rather than failing. `list-review` marks it with a yellow `[!]` tag so you can see it immediately:
 
 ```
   [2] [!] Blood River.epub
@@ -455,7 +455,7 @@ If you run `review-accept` on a file that turns out to be a duplicate (e.g. it w
 
 The same prompt appears during `rematch` if the candidate you pick is already in Calibre — you can overwrite, discard, or `[r]` go back and try a different match without losing your place.
 
-With `duplicate_action: import` in your config, the same smart merge happens automatically — same format is replaced in-place, different format is added to the existing record. No second Calibre entry is ever created.
+With `duplicate_action: import` in your config, the same-format case is also handled automatically — the existing format is replaced in-place and metadata refreshed. No second Calibre entry is ever created.
 
 To batch-delete duplicates:
 
