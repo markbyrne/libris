@@ -240,9 +240,20 @@ else
         echo "  Generate one at: GitHub → Settings → Developer settings → Personal access tokens"
         echo "  Required scope: repo (read) — or use a fine-grained token with Contents: read"
         echo ""
-        GITHUB_TOKEN="$(ask_secret "GitHub personal access token")"
+        echo "  Paste your token and press Enter:"
+        printf "  Token: "
+        GITHUB_TOKEN=""
+        read -rs GITHUB_TOKEN < /dev/tty; echo ""
+        GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN" | tr -d '[:space:]')"
         if [[ -z "$GITHUB_TOKEN" ]]; then
             error "No token provided — cannot install from private repo."
+            exit 1
+        fi
+        # Validate token looks like a GitHub PAT
+        if [[ ! "$GITHUB_TOKEN" =~ ^(ghp_|github_pat_) ]]; then
+            error "Token doesn't look like a GitHub PAT (expected ghp_ or github_pat_ prefix)."
+            error "Got prefix: '${GITHUB_TOKEN:0:12}...'"
+            error "Re-run and paste only the token value."
             exit 1
         fi
     fi
@@ -261,12 +272,7 @@ else
         # reject it with curl error 43 (CURLE_BAD_FUNCTION_ARGUMENT). Strip all
         # CR / whitespace first, then hand curl the header via a --config file on
         # stdin so the token never lands in the process list or the command line.
-        GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN" | tr -d '[:space:]')"
-        if [[ -z "$GITHUB_TOKEN" ]]; then
-            error "GitHub token was empty after trimming whitespace — re-run and paste it again."
-            exit 1
-        fi
-        debug "token length after trim: ${#GITHUB_TOKEN} chars"
+        debug "token length: ${#GITHUB_TOKEN} chars"
         debug "curl version: $(curl --version 2>&1 | head -1)"
         debug "git version:  $(git --version 2>&1)"
 
