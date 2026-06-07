@@ -415,13 +415,18 @@ if [[ "$SKIP_CONFIG" == false ]]; then
 
     # ── Book directories ───────────────────────────────────────────────────────
     echo -e "  ${BOLD}Book directories:${NC}"
-    BOOKS_ROOT="$(ask "Root directory for book folders" "$HOME/books")"
+    BOOKS_ROOT="$(ask "Root directory for book folders" "$HOME/libris")"
     BOOKS_ROOT="${BOOKS_ROOT/#\~/$HOME}"
     echo ""
-    INCOMING="$(ask "  Incoming dir  (drop files here)" "$BOOKS_ROOT/incoming")"
-    STAGING="$( ask "  Staging dir   (conversion workspace)" "$BOOKS_ROOT/staging")"
-    REVIEW="$(  ask "  Review dir    (low-confidence matches)" "$BOOKS_ROOT/review")"
-    FAILED="$(  ask "  Failed dir    (processing errors)" "$BOOKS_ROOT/failed")"
+    echo -e "  ${DIM}📥 Incoming dir — drop new downloads here; Libris watches this folder.${NC}"
+    INCOMING="$(ask "  Incoming dir" "$BOOKS_ROOT/incoming")"
+    echo -e "  ${DIM}🔍 Review dir — files with low confidence matches land here for your approval.${NC}"
+    REVIEW="$(  ask "  Review dir" "$BOOKS_ROOT/review")"
+    echo -e "  ${DIM}🗂  Staging dir — temporary workspace for conversion (can be anywhere).${NC}"
+    STAGING="$( ask "  Staging dir" "$BOOKS_ROOT/staging")"
+    echo -e "  ${DIM}❌ Failed dir — processing errors land here; inspect then recover or delete.${NC}"
+    FAILED="$(  ask "  Failed dir" "$BOOKS_ROOT/failed")"
+    echo -e "  ${DIM}💾 State DB — Libris's own SQLite database (NOT the Calibre database).${NC}"
     STATE_DB="$(ask "  State DB path" "$BOOKS_ROOT/libris.db")"
     INCOMING="${INCOMING/#\~/$HOME}"; STAGING="${STAGING/#\~/$HOME}"
     REVIEW="${REVIEW/#\~/$HOME}";    FAILED="${FAILED/#\~/$HOME}"
@@ -441,6 +446,8 @@ if [[ "$SKIP_CONFIG" == false ]]; then
   docker_container: $DOCKER_CONTAINER"
     else
         CALIBRE_MODE="local"
+        echo -e "  ${DIM}📚 Calibre Library — where Calibre stores your book files. Must match${NC}"
+        echo -e "  ${DIM}   your Calibre settings (Preferences → Libraries).${NC}"
         LIBRARY_PATH="$(ask "Calibre library path" "$HOME/Calibre Library")"
         LIBRARY_PATH="${LIBRARY_PATH/#\~/$HOME}"
         DOCKER_CONTAINER=""
@@ -506,14 +513,14 @@ if [[ "$SKIP_CONFIG" == false ]]; then
 # Full documentation: https://github.com/markbyrne/libris#readme
 
 watcher:
-  incoming_dir: $INCOMING
-  scan_interval_hours: 1.0     # re-scan on startup + every N hours (0 = startup only)
+  incoming_dir: $INCOMING     # drop new downloads here; Libris watches this folder
+  scan_interval_hours: 1.0    # re-scan on startup + every N hours (0 = startup only)
 
 paths:
-  staging_dir: $STAGING
-  review_dir:  $REVIEW
-  failed_dir:  $FAILED
-  state_db:    $STATE_DB
+  staging_dir: $STAGING       # temporary workspace for conversion (can be on any drive)
+  review_dir:  $REVIEW        # low-confidence matches land here for your approval
+  failed_dir:  $FAILED        # processing errors land here; inspect then recover or delete
+  state_db:    $STATE_DB      # Libris's own SQLite database (NOT the Calibre database)
 
 $CALIBRE_YAML
 
