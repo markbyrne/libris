@@ -159,6 +159,34 @@ def _hyperlink(url: str, text: str) -> str:
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
+def _show_queue_summary(config) -> None:
+    """Re-render the review queue after an accept/rematch so the user sees fresh IDs.
+
+    Shows a compact list (filename + score) rather than the full _render_review_record
+    detail — the user can run 'libris list-review' for full detail if needed.
+    Prints a green 'Queue is now empty' message when nothing remains.
+    """
+    store = _open_store(config.paths.state_db)
+    records, stale = _live_review_records(store)
+    store.close()
+    click.echo()
+    if not records:
+        click.echo(click.style("  ✅  Review queue is now empty.", fg="green"))
+    else:
+        click.echo(f"  {len(records)} item(s) remaining in review:")
+        click.echo(_hr())
+        click.echo()
+        for i, r in enumerate(records, 1):
+            _render_review_record(i, r)
+            click.echo()
+    if stale:
+        click.echo(click.style(
+            f"  ⚠   {stale} stale record(s) not shown — run 'libris review-discard --stale'",
+            fg="yellow",
+        ))
+    click.echo()
+
+
 def _live_review_records(store: "StateStore") -> list:
     """Return REVIEW records whose file still exists on disk, in stable order.
 
@@ -958,6 +986,12 @@ def review_accept(
                 any_failed = True
         click.echo()
 
+    # After single-item accept (--id or path), re-render the queue immediately
+    # so the user sees the updated IDs without having to re-run list-review.
+    # For --accept-all the skipped-items summary below serves the same purpose.
+    if not accept_all:
+        _show_queue_summary(config)
+
     # After --accept-all, re-query the queue for fresh IDs and show a tidy
     # summary of anything that still needs attention.
     if accept_all and skipped_items:
@@ -1647,6 +1681,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                     click.echo(f"      Author:  {', '.join(selected.candidate.authors)}")
                 click.echo(f"      Score:   {selected.confidence:.2f} (manually selected)")
                 click.echo()
+                _show_queue_summary(config)
                 return
 
             elif (imported_record.state == FileState.REVIEW
@@ -1687,6 +1722,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                         )
                         sys.exit(1)
                     click.echo()
+                    _show_queue_summary(config)
                     return
 
                 elif dup_choice == "d":
@@ -1696,6 +1732,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                     pipeline._store.upsert(imported_record)
                     click.echo(f"  🗑   {file_path.name}")
                     click.echo()
+                    _show_queue_summary(config)
                     return
 
                 elif dup_choice == "s":  # skip — leave in review
@@ -1719,6 +1756,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
         elif choice == "q":
             click.echo("  Cancelled — file remains in review.")
             click.echo()
+            _show_queue_summary(config)
             return
 
         else:
