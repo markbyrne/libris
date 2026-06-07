@@ -20,6 +20,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from libris.exceptions import ConfigError
+
 
 # ---------------------------------------------------------------------------
 # State enum
@@ -143,16 +145,23 @@ class StateStore:
 
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(
-            str(db_path),
-            check_same_thread=False,
-            isolation_level=None,   # autocommit
-        )
-        # Use Row factory so _row_to_record accesses columns by name, not position.
-        # This makes the schema resilient to future column additions.
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL;")
-        self._conn.execute(_CREATE_TABLE)
+        try:
+            self._conn = sqlite3.connect(
+                str(db_path),
+                check_same_thread=False,
+                isolation_level=None,   # autocommit
+            )
+            # Use Row factory so _row_to_record accesses columns by name, not position.
+            # This makes the schema resilient to future column additions.
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL;")
+            self._conn.execute(_CREATE_TABLE)
+        except sqlite3.DatabaseError as exc:
+            raise ConfigError(
+                f"State DB at '{db_path}' is corrupt or unreadable ({exc}). "
+                "Move it aside and re-run to rebuild — the DB is a rebuildable cache, "
+                "not a source of truth."
+            ) from exc
         # Migrate: add calibre_book_id column if this is an older DB.
         # ALTER TABLE always appends to the end — named access in _row_to_record
         # means column order doesn't matter.

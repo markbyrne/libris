@@ -37,7 +37,7 @@ import httpx
 from .calibre import get_calibre
 from .cleaner import clean_query as _clean_query
 from .config import load_config
-from .exceptions import RateLimitError
+from .exceptions import ConfigError, RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
 from .metadata.resolver import _extract_author_hint, _extract_year, _extract_series, _SERIES_PREFIX
 from .metadata.scorer import dedup_candidates, score_candidate
@@ -112,6 +112,14 @@ def _die(msg: str) -> None:
     sys.exit(1)
 
 
+def _open_store(db_path: Path) -> StateStore:
+    """Open the state store, printing a clear user-facing error if the DB is corrupt."""
+    try:
+        return StateStore(db_path)
+    except ConfigError as exc:
+        _die(str(exc))
+
+
 def _calibredb_list(query: str, config) -> str:
     """Run calibredb list and return formatted output. Works in local and docker mode."""
     if config.calibre.mode == "docker":
@@ -183,6 +191,7 @@ def _render_review_record(i: int, r) -> None:
 
     if not _has_match(r):
         click.echo(click.style("        [!] No match found", fg="yellow"))
+        click.echo(click.style(f"           Try:  libris rematch --id {i}", dim=True))
     else:
         matched = r.matched_title or "(unknown)"
         if r.matched_author:
@@ -382,10 +391,15 @@ def import_one(file_path: Path, config_path: Optional[Path]) -> None:
     if record.confidence is not None:
         click.echo(f"  Score:   {record.confidence:.2f}")
     if record.error_msg:
-        click.echo(f"  Error:   {record.error_msg}", err=True)
+        if record.state == FileState.IMPORTED:
+            # Informational note (e.g. format-merge) — not an error
+            click.echo(f"  Note:    {record.error_msg}")
+        else:
+            click.echo(f"  Error:   {record.error_msg}", err=True)
     click.echo()
 
-    sys.exit(0 if record.state == FileState.IMPORTED else 1)
+    # Exit 0 for any controlled disposition; 1 only for genuine failure
+    sys.exit(0 if record.state in (FileState.IMPORTED, FileState.REVIEW, FileState.PENDING_PARTS) else 1)
 
 
 @main.command("check-config")
@@ -408,7 +422,12 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  State DB:       {config.paths.state_db}")
     click.echo(f"  Calibre mode:   {config.calibre.mode}")
     if config.calibre.mode == "local":
-        click.echo(f"  Library path:   {config.calibre.library_path}")
+        _lib = config.calibre.library_path
+        click.echo(f"  Library path:   {_lib}")
+        if not _lib.exists():
+            click.echo(click.style(
+                f"  ⚠   Library path does not exist — it will be created on first import.", fg="yellow"
+            ))
     else:
         click.echo(f"  Container:      {config.calibre.docker_container}")
     click.echo(f"  Confidence:     {config.metadata.confidence_threshold}")
@@ -416,8 +435,8 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  Mock mode:      {config.metadata.mock_mode}")
     click.echo(f"  Ebook format:   {config.output.preferred_ebook_format}  (policy: {config.output.ebook_format_policy})")
     _scan = config.watcher.scan_interval_hours
-    _scan_str = f"every {_scan:g}h" if _scan > 0 else "disabled"
-    click.echo(f"  Folder scan:    on startup + {_scan_str}")
+    _scan_str = f"every {_scan:g}h" if _scan > 0 else "startup only (periodic rescan disabled)"
+    click.echo(f"  Folder scan:    {_scan_str}")
     click.echo(f"  ntfy topic:     {config.ntfy.topic or '(not set)'}")
     click.echo(f"  ntfy enabled:   {config.ntfy.enabled}")
     click.echo(f"  Log level:      {config.log_level}")
@@ -449,7 +468,7 @@ def list_review(config_path: Optional[Path]) -> None:
     """List all files currently in REVIEW state (low-confidence matches)."""
     path = _resolve_config(config_path)
     config = load_config(path)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     records, stale_count = _live_review_records(store)
     failed_records = store.list_by_state(FileState.FAILED)
     store.close()
@@ -524,7 +543,7 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
     """
     path = _resolve_config(config_path)
     config = load_config(path)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     records, _ = _live_review_records(store)
     store.close()
 
@@ -616,7 +635,7 @@ def review_discard(
     if n_flags > 1:
         _die("Only one of --id, --duplicates, --stale, or --all may be used at a time.")
 
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
 
     # --stale: clean up records whose file has already been removed from disk
     if discard_stale:
@@ -738,7 +757,7 @@ def review_accept(
     if n_methods > 1:
         _die("Only one of FILE_PATH, --id, or --accept-all may be used at a time.")
 
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
 
     # Build a list of (path, record_or_None, queue_position) triples so we can
     # use cached metadata and show accurate rematch IDs in error messages.
@@ -918,14 +937,18 @@ def review_accept(
         if record.confidence is not None:
             click.echo(f"       Score:   {record.confidence:.2f}")
         if record.error_msg:
-            click.echo(f"       Error:   {record.error_msg}", err=True)
-            any_failed = True
+            if record.state == FileState.IMPORTED:
+                # Informational note (e.g. "Added EPUB format to Calibre book N")
+                click.echo(f"       Note:    {record.error_msg}")
+            else:
+                click.echo(f"       Error:   {record.error_msg}", err=True)
+                any_failed = True
         click.echo()
 
     # After --accept-all, re-query the queue for fresh IDs and show a tidy
     # summary of anything that still needs attention.
     if accept_all and skipped_items:
-        fresh_store = StateStore(config.paths.state_db)
+        fresh_store = _open_store(config.paths.state_db)
         fresh_records, _ = _live_review_records(fresh_store)
         fresh_store.close()
 
@@ -981,7 +1004,7 @@ def recover(
     """
     path = _resolve_config(config_path)
     config = load_config(path)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     records = store.list_by_state(FileState.FAILED)
 
     if not records:
@@ -1116,7 +1139,7 @@ def list_pending(config_path: Optional[Path]) -> None:
     from datetime import datetime, timezone, timedelta
     path = _resolve_config(config_path)
     config = load_config(path)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     groups = store.list_pending_groups()
     store.close()
 
@@ -1197,7 +1220,7 @@ def combine_parts(
     config = load_config(path)
     _setup_logging(config.log_level)
 
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     groups = store.list_pending_groups()
     store.close()
 
@@ -1321,7 +1344,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
     config = load_config(path)
     _setup_logging(config.log_level)
 
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     records, _ = _live_review_records(store)
     store.close()
 
@@ -1740,7 +1763,7 @@ def revert_import(
         click.echo()
 
     calibre = get_calibre(config.calibre)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
 
     review_dir = config.paths.review_dir
     review_dir.mkdir(parents=True, exist_ok=True)
@@ -1813,7 +1836,7 @@ def reset(config_path: Optional[Path]) -> None:
     """
     path = _resolve_config(config_path)
     config = load_config(path)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     count = store.reset_processing()
     store.close()
 
@@ -1863,7 +1886,7 @@ def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
     _setup_logging(config.log_level)
 
     calibre = get_calibre(config.calibre)
-    store = StateStore(config.paths.state_db)
+    store = _open_store(config.paths.state_db)
     incoming = config.watcher.incoming_dir
 
     books = calibre.list_books()
@@ -2027,3 +2050,11 @@ def _setup_logging(level: str) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    # Suppress noisy third-party HTTP loggers regardless of the configured
+    # log level.  httpx/httpcore log full request URLs at INFO level, which
+    # would expose API keys embedded in query parameters (e.g. Google Books
+    # appends ?key=YOUR_KEY to every request URL).  These logs are never
+    # useful in normal operation and create significant terminal noise during
+    # interactive commands such as import-one and review-accept.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

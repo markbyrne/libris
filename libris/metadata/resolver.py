@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
+import os
 import re
+import signal
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +22,34 @@ from .scorer import build_result
 _MOCK_CANDIDATES: dict[str, list[dict]] = {}
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Cover temp-file cleanup
+# ---------------------------------------------------------------------------
+# Track temp cover paths created in this process so we can remove them on
+# exit or SIGTERM.  Without cleanup a kill -TERM (e.g. systemd stop) leaves
+# libris_cover_* files accumulating in /tmp.
+_pending_cover_paths: set[str] = set()
+
+
+def _cleanup_cover_temps() -> None:
+    """Remove any outstanding cover temp files (atexit + SIGTERM handler)."""
+    for p in list(_pending_cover_paths):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    _pending_cover_paths.clear()
+
+
+def _sigterm_handler(signum: int, frame: object) -> None:  # noqa: ARG001
+    _cleanup_cover_temps()
+    # Re-raise as SystemExit so atexit handlers run and the process exits cleanly.
+    raise SystemExit(0)
+
+
+atexit.register(_cleanup_cover_temps)
+signal.signal(signal.SIGTERM, _sigterm_handler)
 
 
 def resolve_metadata(
@@ -179,22 +210,31 @@ def resolve_metadata(
 
 
 def _download_cover(url: str, client: httpx.Client) -> Optional[Path]:
-    """Download cover image to a temp file. Returns path or None on failure."""
+    """Download cover image to a temp file. Returns path or None on failure.
+
+    The temp file path is registered in ``_pending_cover_paths`` so the atexit /
+    SIGTERM handler can clean it up if the process is killed before the caller
+    removes the file via ``cover_path.unlink()``.
+    """
     import tempfile
+    cover_path: Optional[Path] = None
     try:
         response = client.get(url, timeout=10.0, follow_redirects=True)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
         ext = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
         fd, path_str = tempfile.mkstemp(suffix=ext, prefix="libris_cover_")
-        import os
         os.close(fd)
         cover_path = Path(path_str)
+        _pending_cover_paths.add(path_str)   # track for SIGTERM cleanup
         cover_path.write_bytes(response.content)
-        log.debug("metadata.cover_downloaded", extra={"url": url, "path": str(cover_path)})
+        log.debug("metadata.cover_downloaded", extra={"url": url, "path": path_str})
         return cover_path
     except Exception as exc:
         log.warning("metadata.cover_download_failed", extra={"url": url, "error": str(exc)})
+        if cover_path is not None:
+            cover_path.unlink(missing_ok=True)
+            _pending_cover_paths.discard(str(cover_path))
         return None
 
 

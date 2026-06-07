@@ -382,6 +382,14 @@ class Pipeline:
         path = event.path
         log.info("pipeline.event", extra={"path": str(path), "type": event.event_type})
 
+        # ── Symlink guard ─────────────────────────────────────────────
+        # Reject symlinks before any processing.  A symlink in the incoming
+        # directory could point to an arbitrary host path, giving an attacker
+        # a primitive for reading files outside the configured tree.
+        if path.is_symlink():
+            log.warning("pipeline.skip_symlink", extra={"path": str(path)})
+            return self._make_record(path, "symlink", FileState.FAILED)
+
         # ── Classify ──────────────────────────────────────────────────
         media_type = self._classifier.classify(path)
         if media_type == MediaType.UNKNOWN:
@@ -1085,7 +1093,7 @@ class Pipeline:
         # ── Same format already in Calibre — apply duplicate_action ───
         id_str = ", ".join(str(i) for i in dup_ids[:3])
         suffix = f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
-        dup_msg = f"Duplicate: already in Calibre (ID{'s' if len(dup_ids) > 1 else ''}: {id_str}{suffix})"
+        dup_msg = f"Duplicate: already in Calibre as {incoming_fmt.upper()} (ID{'s' if len(dup_ids) > 1 else ''}: {id_str}{suffix})"
 
         log.info(
             "pipeline.duplicate_detected",

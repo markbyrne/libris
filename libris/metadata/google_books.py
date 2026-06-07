@@ -52,14 +52,19 @@ def fetch(
     """
     q_string = _build_query_string(query)
     params: dict = {"q": q_string, "maxResults": 5, "printType": "books"}
+    # Pass the API key as a request header, not a URL query parameter.
+    # httpx (and many logging middlewares) log the full request URL, so a
+    # key in the query string would appear in cleartext in every log line.
+    # The X-goog-api-key header is the preferred alternative per Google docs.
+    headers: dict = {}
     if api_key:
-        params["key"] = api_key
+        headers["X-goog-api-key"] = api_key
 
     log.debug("google_books.fetch", extra={"query": q_string})
 
     try:
         _client = client or httpx.Client(timeout=_TIMEOUT)
-        response = _client.get(_BASE_URL, params=params)
+        response = _client.get(_BASE_URL, params=params, headers=headers)
         rl_reason = _rate_limit_reason(response)
         if rl_reason is not None:
             raise RateLimitError(

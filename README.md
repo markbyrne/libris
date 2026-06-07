@@ -210,6 +210,8 @@ To get a key:
 
 If you hit a rate limit during `libris rematch`, it will prompt you to add a key and save it to your config automatically.
 
+> **Security note:** The API key is sent as an `X-goog-api-key` request header rather than a URL query parameter. This prevents the key from appearing in any URL-logging middleware or log files.
+
 ### Ebook format policy
 
 `output.ebook_format_policy` controls how files that aren't already in the preferred format are handled:
