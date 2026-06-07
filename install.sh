@@ -246,7 +246,7 @@ else
         # Private repo: download the tarball via GitHub API (avoids git credential
         # URL issues) then install from the local file. This block is only needed
         # during private alpha/beta testing — remove once the repo is public.
-        LIBRIS_TARBALL="$(mktemp /tmp/libris-XXXXXX.tar.gz)"
+        LIBRIS_TARBALL="/tmp/libris-${LIBRIS_VERSION}.tar.gz"
         if ! curl -fsSL \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             "https://api.github.com/repos/markbyrne/libris/tarball/${LIBRIS_VERSION}" \
