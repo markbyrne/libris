@@ -2,7 +2,7 @@
 
 import pytest
 
-from libris.cleaner import clean_query, extract_isbn
+from libris.cleaner import clean_query, extract_isbn, extract_part, strip_part_marker
 
 
 @pytest.mark.parametrize("raw,expected_contains,expected_not_contains", [
@@ -61,6 +61,50 @@ def test_clean_query_all_noise():
     result = clean_query("[MP3 320kbps] (2021) Part 1 of 1.mp3")
     # Should produce something (or empty) without crashing
     assert isinstance(result, str)
+
+
+
+# ---------------------------------------------------------------------------
+# extract_part — multi-part detection
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,expected", [
+    # ── Existing keyword-based patterns ──────────────────────────────────
+    ("Brisingr (part 1 of 3)",       (1, 3)),
+    ("Brisingr (part 1.3)",          (1, 3)),
+    ("Brisingr (part 1/3)",          (1, 3)),
+    ("Brisingr Disc 1 of 2",         (1, 2)),
+    ("Brisingr Part 1",              (1, None)),
+    ("Eragon",                       (None, None)),
+    # ── NEW: bare "N of M" / "N/M" in parens (no keyword) ────────────────
+    ("Book Title (1 of 3)",          (1, 3)),
+    ("Book Title (2 of 3)",          (2, 3)),
+    ("Book Title (1/3)",             (1, 3)),
+    ("Book Title (2/3)",             (2, 3)),
+    # ── NEW: bare trailing number in parens (no keyword) ─────────────────
+    ("Book Title (1)",               (1, None)),
+    ("Book Title (2)",               (2, None)),
+    ("Book Title (12)",              (12, None)),
+    # ── Year false-positives must NOT match ──────────────────────────────
+    ("Some Book (2021)",             (None, None)),   # 4-digit year
+    ("Title Part One (2021)",        (None, None)),   # year mid-stem
+    ("A Book (999) Extra Text",      (None, None)),   # not end-anchored
+])
+def test_extract_part(raw, expected):
+    assert extract_part(raw) == expected
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Brisingr (part 1 of 3)",        "Brisingr"),
+    ("Name of the Wind Disc 1 of 2",  "Name of the Wind"),
+    # NEW bare patterns
+    ("Book Title (1)",                "Book Title"),
+    ("Book Title (1 of 3)",           "Book Title"),
+    ("Book Title (2/3)",              "Book Title"),
+    ("Eragon",                        "Eragon"),
+])
+def test_strip_part_marker(raw, expected):
+    assert strip_part_marker(raw) == expected
 
 
 @pytest.mark.parametrize("raw,expected_isbn", [
