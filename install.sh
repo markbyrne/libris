@@ -189,10 +189,18 @@ else
 fi
 
 # Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
+# The marker lives in the stdlib dir, not sys.prefix root.
 VENV_DIR="$HOME/.local/share/libris/venv"
 EXTERNALLY_MANAGED=false
-PYTHON_PREFIX="$(python3 -c 'import sys; print(sys.prefix)')"
-if [[ -f "$PYTHON_PREFIX/EXTERNALLY-MANAGED" ]]; then
+if python3 -c "
+import sysconfig, os, sys
+stdlib = sysconfig.get_path('stdlib')
+if stdlib and os.path.exists(os.path.join(stdlib, 'EXTERNALLY-MANAGED')):
+    sys.exit(0)
+if os.path.exists(os.path.join(sys.base_prefix, 'EXTERNALLY-MANAGED')):
+    sys.exit(0)
+sys.exit(1)
+" 2>/dev/null; then
     EXTERNALLY_MANAGED=true
 fi
 
