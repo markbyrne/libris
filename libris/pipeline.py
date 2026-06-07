@@ -25,7 +25,7 @@ from .audio import tagger as audio_tag
 from .calibre import get_calibre
 from .calibre.base import CalibreBackend
 from .classifier import EBOOK_EXTENSIONS, Classifier, MediaType
-from .cleaner import clean_query, extract_part, strip_part_marker
+from .cleaner import clean_query, extract_part, is_chaff, strip_part_marker
 from .config import Config
 from .ebook import converter as ebook_conv
 from .exceptions import BookPipelineError, ClassificationError
@@ -381,6 +381,21 @@ class Pipeline:
     def _handle_event(self, event: FileEvent) -> FileRecord:
         path = event.path
         log.info("pipeline.event", extra={"path": str(path), "type": event.event_type})
+
+        # ── Chaff guard ───────────────────────────────────────────────
+        # Reject known-clutter files before any processing so they never
+        # consume API quota or clutter list-review.  False positives can be
+        # recovered with 'libris recover --id N'.
+        if is_chaff(path.name):
+            log.info("pipeline.skip_chaff", extra={"path": str(path)})
+            record = self._make_record(path, "chaff", FileState.FAILED)
+            record.error_msg = "Chaff: filename matches known non-book pattern"
+            failed_dest = self.config.paths.failed_dir / path.name
+            if path.exists():
+                _safe_move(path, failed_dest)
+                record.current_path = str(failed_dest)
+            self._store.upsert(record)
+            return record
 
         # ── Symlink guard ─────────────────────────────────────────────
         # Reject symlinks before any processing.  A symlink in the incoming
