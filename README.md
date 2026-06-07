@@ -720,8 +720,13 @@ Libris detects split audiobooks by filename pattern and holds them in staging un
 | `Brisingr (part 1/3).m4b` | Part 1 of 3 |
 | `Name of the Wind Disc 1 of 2.m4b` | Part 1 of 2 |
 | `Eragon Part 1.m4b` | Part 1 (total unknown) |
+| `Eragon (1 of 2).mp3` | Part 1 of 2 (no keyword needed) |
+| `Eragon (1/2).mp3` | Part 1 of 2 (slash form) |
+| `Eragon (1).mp3` | Part 1 (total unknown) |
 
-When the total is known (e.g. `part 1 of 3`), import is triggered automatically once all parts have arrived. When the total is unknown (e.g. `Part 1` only), use `libris combine-parts --id N` to import manually.
+The `part`/`disc`/`cd` keyword is optional — bare sequential numbers in parentheses at the end of a filename are also recognised. This covers the common convention of downloaders naming files `Book Title (1).mp3`, `Book Title (2).mp3`, etc.
+
+When the total is known (e.g. `1 of 3`), import is triggered automatically once all parts have arrived. When the total is unknown (e.g. `(1)` only), use `libris combine-parts --id N` to import manually.
 
 ### Flow
 
