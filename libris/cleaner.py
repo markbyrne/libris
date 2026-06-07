@@ -131,6 +131,15 @@ _PART_LONE_BARE = re.compile(
     r'\b(?:part|disc|disk|cd)\s+(\d+)\b',
     re.IGNORECASE,
 )
+# Bare "N of M" or "N/M" in parens with no keyword: "(1 of 3)", "(1/3)"
+_PART_PAREN_NUM_OF = re.compile(
+    r'\((\d+)\s*(?:of|/)\s*(\d+)\)',
+)
+# Bare trailing number in parens with no keyword: "(1)", "(2)"
+# Capped at ≤3 digits and end-anchored to avoid matching years mid-stem
+_PART_PAREN_BARE = re.compile(
+    r'\((\d{1,3})\)\s*$',
+)
 
 # Strips all of the above from a filename stem
 _PART_STRIP_PATTERNS = (
@@ -139,6 +148,8 @@ _PART_STRIP_PATTERNS = (
     _PART_BARE_OF,
     _PART_LONE_PAREN,
     _PART_LONE_BARE,
+    _PART_PAREN_NUM_OF,
+    _PART_PAREN_BARE,
 )
 
 
@@ -158,7 +169,7 @@ def extract_part(raw: str) -> tuple[Optional[int], Optional[int]]:
       "Eragon"                   → (None, None)
     """
     # Priority order: patterns with totals first (most informative)
-    for pat in (_PART_PAREN_OF, _PART_PAREN_DOT, _PART_BARE_OF):
+    for pat in (_PART_PAREN_OF, _PART_PAREN_DOT, _PART_BARE_OF, _PART_PAREN_NUM_OF):
         m = pat.search(raw)
         if m:
             try:
@@ -167,7 +178,7 @@ def extract_part(raw: str) -> tuple[Optional[int], Optional[int]]:
                 pass
 
     # Lone part number (no total known)
-    for pat in (_PART_LONE_PAREN, _PART_LONE_BARE):
+    for pat in (_PART_LONE_PAREN, _PART_LONE_BARE, _PART_PAREN_BARE):
         m = pat.search(raw)
         if m:
             try:
