@@ -246,17 +246,55 @@ else
         # Private repo: download the tarball via GitHub API (avoids git credential
         # URL issues) then install from the local file. This block is only needed
         # during private alpha/beta testing — remove once the repo is public.
+        #
+        # NOTE: pasted PATs frequently carry a trailing CR (\r) or surrounding
+        # whitespace, especially over SSH/PuTTY. With IFS=$'\n\t', `read` does not
+        # strip a trailing CR, so the token can end up as "ghp_xxx\r". Passing that
+        # inside an "Authorization:" header makes older libcurl (Debian/Ubuntu)
+        # reject it with curl error 43 (CURLE_BAD_FUNCTION_ARGUMENT). Strip all
+        # CR / whitespace first, then hand curl the header via a --config file on
+        # stdin so the token never lands in the process list or the command line.
+        GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN" | tr -d '[:space:]')"
+        if [[ -z "$GITHUB_TOKEN" ]]; then
+            error "GitHub token was empty after trimming whitespace — re-run and paste it again."
+            exit 1
+        fi
+
         LIBRIS_TARBALL="/tmp/libris-${LIBRIS_VERSION}.tar.gz"
-        if ! curl -fsSL \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/markbyrne/libris/tarball/${LIBRIS_VERSION}" \
-            -o "$LIBRIS_TARBALL"; then
+        LIBRIS_API_URL="https://api.github.com/repos/markbyrne/libris/tarball/${LIBRIS_VERSION}"
+        trap 'rm -f "$LIBRIS_TARBALL"' EXIT
+
+        download_ok=false
+        if command -v curl &>/dev/null; then
+            # Feed the auth header through a curl config file on stdin. This keeps
+            # the token out of `ps`/argv and sidesteps the malformed-header path
+            # that triggers curl 43 on older libcurl.
+            if printf 'header = "Authorization: token %s"\n' "$GITHUB_TOKEN" \
+                | curl --fail --silent --show-error --location \
+                       --config - \
+                       --output "$LIBRIS_TARBALL" \
+                       "$LIBRIS_API_URL"; then
+                download_ok=true
+            fi
+        fi
+
+        if [[ "$download_ok" != true ]] && command -v wget &>/dev/null; then
+            warn "curl download failed — retrying with wget…"
+            if wget --quiet \
+                    --header="Authorization: token ${GITHUB_TOKEN}" \
+                    -O "$LIBRIS_TARBALL" \
+                    "$LIBRIS_API_URL"; then
+                download_ok=true
+            fi
+        fi
+
+        if [[ "$download_ok" != true ]]; then
             error "Failed to download libris tarball — check your token and try again."
             rm -f "$LIBRIS_TARBALL"
             exit 1
         fi
+
         INSTALL_TARGET="$LIBRIS_TARBALL"
-        trap 'rm -f "$LIBRIS_TARBALL"' EXIT
     else
         INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
     fi
