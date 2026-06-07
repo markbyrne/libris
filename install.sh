@@ -8,6 +8,13 @@
 set -uo pipefail
 IFS=$'\n\t'
 
+# ── Debug flag (pass --debug to enable) ───────────────────────────────────────
+DEBUG=false
+for _arg in "${@:-}"; do
+    [[ "$_arg" == "--debug" ]] && DEBUG=true
+done
+debug() { $DEBUG && echo -e "  [debug] $*" >&2 || true; }
+
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
@@ -259,33 +266,52 @@ else
             error "GitHub token was empty after trimming whitespace — re-run and paste it again."
             exit 1
         fi
+        debug "token length after trim: ${#GITHUB_TOKEN} chars"
+        debug "token prefix: ${GITHUB_TOKEN:0:6}... (first 6 chars only)"
+        debug "curl version: $(curl --version 2>&1 | head -1)"
+        debug "git version:  $(git --version 2>&1)"
 
         LIBRIS_TARBALL="/tmp/libris-${LIBRIS_VERSION}.tar.gz"
         LIBRIS_API_URL="https://api.github.com/repos/markbyrne/libris/tarball/${LIBRIS_VERSION}"
+        debug "tarball path: $LIBRIS_TARBALL"
+        debug "api url:      $LIBRIS_API_URL"
         trap 'rm -f "$LIBRIS_TARBALL"' EXIT
 
         download_ok=false
         if command -v curl &>/dev/null; then
-            # Feed the auth header through a curl config file on stdin. This keeps
-            # the token out of `ps`/argv and sidesteps the malformed-header path
-            # that triggers curl 43 on older libcurl.
-            if printf 'header = "Authorization: token %s"\n' "$GITHUB_TOKEN" \
+            debug "attempting curl download via --config stdin…"
+            CURL_CONFIG="$(printf 'header = "Authorization: token %s"\n' "$GITHUB_TOKEN")"
+            debug "curl config line (masked): header = \"Authorization: token ${GITHUB_TOKEN:0:6}...\""
+            CURL_EXIT=0
+            printf '%s\n' "$CURL_CONFIG" \
                 | curl --fail --silent --show-error --location \
                        --config - \
                        --output "$LIBRIS_TARBALL" \
-                       "$LIBRIS_API_URL"; then
+                       "$LIBRIS_API_URL" || CURL_EXIT=$?
+            debug "curl exit code: $CURL_EXIT"
+            if [[ $CURL_EXIT -eq 0 ]]; then
                 download_ok=true
+                debug "tarball size: $(wc -c < "$LIBRIS_TARBALL") bytes"
+            else
+                debug "curl failed — trying verbose mode for diagnostics…"
+                $DEBUG && printf '%s\n' "$CURL_CONFIG" \
+                    | curl --location --config - \
+                           --output "$LIBRIS_TARBALL" \
+                           --verbose \
+                           "$LIBRIS_API_URL" 2>&1 | grep -E "^[<>*]" >&2 || true
             fi
         fi
 
         if [[ "$download_ok" != true ]] && command -v wget &>/dev/null; then
             warn "curl download failed — retrying with wget…"
-            if wget --quiet \
-                    --header="Authorization: token ${GITHUB_TOKEN}" \
-                    -O "$LIBRIS_TARBALL" \
-                    "$LIBRIS_API_URL"; then
-                download_ok=true
-            fi
+            debug "attempting wget download…"
+            WGET_EXIT=0
+            wget --quiet \
+                 --header="Authorization: token ${GITHUB_TOKEN}" \
+                 -O "$LIBRIS_TARBALL" \
+                 "$LIBRIS_API_URL" || WGET_EXIT=$?
+            debug "wget exit code: $WGET_EXIT"
+            [[ $WGET_EXIT -eq 0 ]] && download_ok=true
         fi
 
         if [[ "$download_ok" != true ]]; then
