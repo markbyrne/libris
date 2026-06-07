@@ -158,11 +158,38 @@ elif [[ "$PLATFORM" == "linux" ]]; then
     MISSING=()
     check_cmd inotifywait || MISSING+=("inotify-tools")
     check_cmd ffmpeg       || MISSING+=("ffmpeg")
+
+    # python3-venv is required for the externally-managed Python install path
+    if ! python3 -m venv --help &>/dev/null 2>&1; then
+        MISSING+=("python3-venv")
+    fi
+
+    if [[ ${#MISSING[@]} -gt 0 ]]; then
+        warn "Missing packages: ${MISSING[*]}"
+        if command -v apt-get &>/dev/null; then
+            info "Installing missing packages via apt-get…"
+            sudo apt-get update -qq
+            sudo apt-get install -y "${MISSING[@]}"
+        elif command -v dnf &>/dev/null; then
+            info "Installing missing packages via dnf…"
+            sudo dnf install -y "${MISSING[@]}"
+        else
+            warn "Install manually and re-run: ${MISSING[*]}"
+        fi
+    fi
+
     if ! check_cmd calibredb; then
         warn "calibredb not found."
         echo ""
         echo "  Calibre is not available via apt — it must be installed from calibre-ebook.com."
         if ask_yn "Install Calibre now? (uses the official Calibre installer)" "y"; then
+            # Install known Calibre prerequisites on Debian/Ubuntu
+            if command -v apt-get &>/dev/null; then
+                info "Installing Calibre prerequisites…"
+                sudo apt-get install -y \
+                    libxcb-cursor0 libgl1 libegl1 \
+                    libxkbcommon0 libdbus-1-3 2>/dev/null || true
+            fi
             if command -v wget &>/dev/null; then
                 sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
             elif command -v curl &>/dev/null; then
@@ -182,18 +209,6 @@ elif [[ "$PLATFORM" == "linux" ]]; then
             warn "Skipping Calibre install. Add calibredb to PATH before running libris."
         fi
         echo ""
-    fi
-
-    if [[ ${#MISSING[@]} -gt 0 ]]; then
-        warn "Missing packages: ${MISSING[*]}"
-        if command -v apt-get &>/dev/null && ask_yn "Install them now via apt-get?" "y"; then
-            sudo apt-get update -qq
-            sudo apt-get install -y "${MISSING[@]}"
-        elif command -v dnf &>/dev/null && ask_yn "Install them now via dnf?" "y"; then
-            sudo dnf install -y "${MISSING[@]}"
-        else
-            warn "Install manually and re-run."
-        fi
     fi
 fi
 
