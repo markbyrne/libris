@@ -619,6 +619,25 @@ If a group times out before all parts arrive, the received parts are moved to `r
 
 ---
 
+### `mark-as-part` — manually flag a review-queue file as part of a set
+
+If a multi-part audiobook arrived in `review/` (e.g. because the filename had no part marker), you can manually register each file as a numbered part and trigger auto-combine:
+
+```bash
+# Flag item [1] in review/ as part 1 of 2
+libris mark-as-part --id 1 --part 1 --total 2
+
+# Flag item [2] as part 2 of 2 — triggers automatic combine + import
+libris mark-as-part --id 2 --part 2 --total 2
+
+# Override the group name (default: derived from filename)
+libris mark-as-part --id 3 --part 1 --group "Eragon"
+```
+
+The `list-review` command hints this option when audiobook files are in the queue.  Once all parts are staged, the set is combined and imported automatically — the same as if the part markers had been detected from the filename.
+
+---
+
 ### `combine-parts` — force-import a partial set
 
 Combine and import a pending group immediately, without waiting for missing parts.
