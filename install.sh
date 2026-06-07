@@ -63,11 +63,14 @@ case "$OS" in
         ;;
 esac
 
-# ── Must run from the repo root ───────────────────────────────────────────────
-if [[ ! -f "pyproject.toml" ]] || ! grep -q 'name = "libris"' pyproject.toml 2>/dev/null; then
-    error "Run this script from the root of the libris repository:"
-    error "  cd /path/to/libris && bash install.sh"
-    exit 1
+# ── Detect local vs remote install mode ──────────────────────────────────────
+LIBRIS_VERSION="v0.2.0-beta"
+LIBRIS_REPO="https://github.com/markbyrne/libris"
+
+if [[ -f "pyproject.toml" ]] && grep -q 'name = "libris"' pyproject.toml 2>/dev/null; then
+    INSTALL_MODE="local"
+else
+    INSTALL_MODE="remote"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,8 +180,15 @@ header "2 · Install Libris"
 hr
 
 echo ""
-info "Installing libris from current directory…"
-if ! $PIP_CMD install --quiet .; then
+if [[ "$INSTALL_MODE" == "local" ]]; then
+    info "Installing libris from local source…"
+    INSTALL_TARGET="."
+else
+    info "Installing libris ${LIBRIS_VERSION} from GitHub…"
+    INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
+fi
+
+if ! $PIP_CMD install --quiet "$INSTALL_TARGET"; then
     error "pip install failed — check the output above for details."
     error "Common causes: wrong Python environment, missing build tools, or network error."
     exit 1
