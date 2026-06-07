@@ -431,6 +431,8 @@ Opens the matched cover image in your default browser. After opening, the full m
 
 Accepts the current metadata match and imports the file into Calibre, bypassing the confidence threshold. Uses cached metadata — no API call required.
 
+After a successful accept, the updated review queue is printed automatically so you can see the new IDs without re-running `list-review`.
+
 ```bash
 # By review queue ID (from list-review)
 libris review-accept --id 1
@@ -496,6 +498,8 @@ libris review-discard --stale        # remove DB records where file is already g
 ### `rematch` — interactively fix a bad metadata match
 
 When the auto-matched title or author is wrong, `rematch` lets you search the APIs yourself and pick the right result.
+
+After importing or quitting, the updated review queue is printed automatically so you can see the new IDs.
 
 ```bash
 libris rematch --id 1
