@@ -29,11 +29,12 @@ hr()      { echo -e "${DIM}─────────────────�
 # ── Prompt helpers ─────────────────────────────────────────────────────────────
 ask() {
     # ask "Prompt" "default" → prints default in brackets; empty input → default
+    # NOTE: prompt goes to stderr so it's visible even inside $() subshells
     local prompt="$1" default="${2:-}" value
     if [[ -n "$default" ]]; then
-        printf "  %s [%s]: " "$prompt" "$default"
+        printf "  %s [%s]: " "$prompt" "$default" >&2
     else
-        printf "  %s: " "$prompt"
+        printf "  %s: " "$prompt" >&2
     fi
     read -r value < /dev/tty
     printf '%s' "${value:-$default}"
@@ -42,8 +43,8 @@ ask() {
 ask_secret() {
     # Like ask but hides input (for API keys / tokens)
     local prompt="$1" value
-    printf "  %s (hidden, Enter to skip): " "$prompt"
-    read -rs value < /dev/tty; echo ""
+    printf "  %s (hidden, Enter to skip): " "$prompt" >&2
+    read -rs value < /dev/tty; echo "" >&2
     printf '%s' "$value"
 }
 
@@ -360,6 +361,7 @@ if [[ "$EXTERNALLY_MANAGED" == true ]]; then
     # Symlink into ~/.local/bin so it's on PATH
     mkdir -p "$HOME/.local/bin"
     ln -sf "$VENV_LIBRIS" "$HOME/.local/bin/libris"
+    export PATH="$PATH:$HOME/.local/bin"
     PIP_CMD="$VENV_PIP"
 else
     if ! $PIP_CMD install --quiet "$INSTALL_TARGET"; then
@@ -555,7 +557,16 @@ else
 fi
 
 EXPORT_LINE="export LIBRIS_CONFIG=\"$CONFIG_PATH\""
+PATH_LINE="export PATH=\"\$HOME/.local/bin:\$PATH\""
 
+# ── Persist PATH if ~/.local/bin not already in profile ───────────────────────
+if ! grep -qF '.local/bin' "$PROFILE" 2>/dev/null; then
+    { echo ""; echo "# Added by Libris installer"; echo "$PATH_LINE"; } >> "$PROFILE"
+    success "Added ~/.local/bin to PATH in $PROFILE"
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# ── Persist LIBRIS_CONFIG ─────────────────────────────────────────────────────
 if grep -qF "LIBRIS_CONFIG" "$PROFILE" 2>/dev/null; then
     success "LIBRIS_CONFIG already set in $PROFILE"
 else
