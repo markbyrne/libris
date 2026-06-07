@@ -67,6 +67,8 @@ The installer will:
 - Optionally install a daemon service (LaunchAgent on macOS, systemd on Linux)
 - Run `libris check-config` to verify everything works
 
+The installer defaults to `~/libris/` as the root for all watch folders. Each directory prompt includes a description of its purpose so you know what you're configuring.
+
 ### Manual installation
 
 ```bash
@@ -95,18 +97,18 @@ Open `~/.config/libris/config.yaml` and set the paths for your setup:
 
 ```yaml
 watcher:
-  incoming_dir: ~/books/incoming      # drop files here to import them
+  incoming_dir: ~/libris/incoming     # drop new downloads here; Libris watches this folder
   scan_interval_hours: 1.0            # re-scan on startup + every N hours
 
 paths:
-  staging_dir: ~/books/staging
-  review_dir:  ~/books/review
-  failed_dir:  ~/books/failed
-  state_db:    ~/books/libris.db
+  staging_dir: ~/libris/staging       # temporary workspace for conversion
+  review_dir:  ~/libris/review        # low-confidence matches land here for your approval
+  failed_dir:  ~/libris/failed        # processing errors; inspect then recover or delete
+  state_db:    ~/libris/libris.db     # Libris's own SQLite database (NOT the Calibre database)
 
 calibre:
   mode: local
-  library_path: ~/Calibre Library     # your Calibre library folder
+  library_path: ~/Calibre Library     # must match Calibre Preferences → Libraries
 
 metadata:
   confidence_threshold: 0.75
@@ -119,7 +121,7 @@ ntfy:
 Create the directories:
 
 ```bash
-mkdir -p ~/books/{incoming,staging,staging/pending,review,failed}
+mkdir -p ~/libris/{incoming,staging,staging/pending,review,failed}
 ```
 
 **2. Point your shell at the config**
