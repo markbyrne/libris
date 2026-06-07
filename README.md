@@ -37,25 +37,37 @@ Works with local Calibre installations and with [calibre-web](https://github.com
 
 ## Requirements
 
-### macOS
-```bash
-brew install fswatch ffmpeg calibre
-```
-
-### Linux
-```bash
-sudo apt install inotify-tools ffmpeg
-# Calibre: https://calibre-ebook.com/download_linux
-```
-
-### Python
-```
-Python 3.10+
-```
+| Dependency | macOS | Linux |
+|------------|-------|-------|
+| **Python 3.10+** | `brew install python` or [python.org](https://python.org) | `sudo apt install python3` |
+| **Calibre** (`calibredb`) | [calibre-ebook.com/download_osx](https://calibre-ebook.com/download_osx) | [calibre-ebook.com/download_linux](https://calibre-ebook.com/download_linux) |
+| **ffmpeg** | `brew install ffmpeg` | `sudo apt install ffmpeg` |
+| **fswatch** (macOS only) | `brew install fswatch` | — |
+| **inotify-tools** (Linux only) | — | `sudo apt install inotify-tools` |
 
 ---
 
 ## Installation
+
+### Automatic (recommended)
+
+Clone the repo and run the installer — it handles dependencies, installs the package, and walks you through config creation:
+
+```bash
+git clone https://github.com/markbyrne/libris.git
+cd libris
+bash install.sh
+```
+
+The installer will:
+- Check and install missing system dependencies
+- Install the `libris` Python package
+- Create a config file at `~/.config/libris/config.yaml`
+- Add `LIBRIS_CONFIG` to your shell profile
+- Optionally install a daemon service (LaunchAgent on macOS, systemd on Linux)
+- Run `libris check-config` to verify everything works
+
+### Manual installation
 
 ```bash
 git clone https://github.com/markbyrne/libris.git
@@ -70,13 +82,13 @@ pip install -e ".[dev]"
 
 ---
 
-## Quick Start
+## Quick Start (manual setup)
 
 **1. Create your config**
 
 ```bash
 mkdir -p ~/.config/libris
-cp /path/to/libris/config.example.yaml ~/.config/libris/config.yaml
+cp config.example.yaml ~/.config/libris/config.yaml
 ```
 
 Open `~/.config/libris/config.yaml` and set the paths for your setup:
@@ -84,6 +96,7 @@ Open `~/.config/libris/config.yaml` and set the paths for your setup:
 ```yaml
 watcher:
   incoming_dir: ~/books/incoming      # drop files here to import them
+  scan_interval_hours: 1.0            # re-scan on startup + every N hours
 
 paths:
   staging_dir: ~/books/staging
@@ -95,8 +108,18 @@ calibre:
   mode: local
   library_path: ~/Calibre Library     # your Calibre library folder
 
+metadata:
+  confidence_threshold: 0.75
+
 ntfy:
   topic: my-libris-alerts             # optional — for push notifications
+  enabled: false
+```
+
+Create the directories:
+
+```bash
+mkdir -p ~/books/{incoming,staging,staging/pending,review,failed}
 ```
 
 **2. Point your shell at the config**
@@ -326,8 +349,10 @@ watcher:
 `libris check-config` shows the resolved scan setting:
 
 ```
-  Folder scan:    on startup + every 1h
+  Folder scan:    every 1h
 ```
+
+(The incoming folder is always scanned once on startup regardless of this setting.)
 
 ---
 
@@ -358,6 +383,7 @@ libris list-review
 
   [3]  unknown-audiobook.m4b
         [!] No match found
+           Try:  libris rematch --id 3
         Path:     "/Users/you/books/review/unknown-audiobook.m4b"
 
   ──────────────────────────────────────────────────
@@ -877,12 +903,85 @@ See the [ntfy self-hosting docs](https://docs.ntfy.sh/install/) for server setup
 
 ---
 
-## Run on startup (Linux)
+## Running as a daemon
 
-Add to crontab (`crontab -e`):
+### macOS — LaunchAgent
 
+Create `~/Library/LaunchAgents/com.libris.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>              <string>com.libris</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/libris</string>
+        <string>run</string>
+        <string>--config</string>
+        <string>/Users/yourname/.config/libris/config.yaml</string>
+    </array>
+    <key>RunAtLoad</key>          <true/>
+    <key>KeepAlive</key>          <true/>
+    <key>StandardOutPath</key>    <string>/Users/yourname/Library/Logs/libris/libris.log</string>
+    <key>StandardErrorPath</key>  <string>/Users/yourname/Library/Logs/libris/libris.error.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LIBRIS_CONFIG</key>  <string>/Users/yourname/.config/libris/config.yaml</string>
+    </dict>
+</dict>
+</plist>
 ```
-@reboot libris run --config /home/user/libris.yaml >> /home/user/libris.log 2>&1 &
+
+```bash
+mkdir -p ~/Library/Logs/libris
+launchctl load ~/Library/LaunchAgents/com.libris.plist   # start now + on login
+launchctl unload ~/Library/LaunchAgents/com.libris.plist  # stop
+tail -f ~/Library/Logs/libris/libris.log                  # follow logs
+```
+
+> **Tip:** Replace `/usr/local/bin/libris` with the output of `which libris`.
+> The `install.sh` script generates and loads this plist automatically.
+
+---
+
+### Linux — systemd user service
+
+Create `~/.config/systemd/user/libris.service`:
+
+```ini
+[Unit]
+Description=Libris book importer daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/yourname/.local/bin/libris run --config /home/yourname/.config/libris/config.yaml
+Restart=on-failure
+RestartSec=10
+Environment=LIBRIS_CONFIG=/home/yourname/.config/libris/config.yaml
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now libris       # start now + on login
+systemctl --user status libris            # check status
+journalctl --user -u libris -f            # follow logs
+systemctl --user stop libris             # stop
+```
+
+> **Tip:** Replace paths with the output of `which libris` and `echo $HOME`.
+> The `install.sh` script generates and enables this service automatically.
+
+To start the service automatically even when you're not logged in (server setups):
+
+```bash
+sudo loginctl enable-linger "$USER"
 ```
 
 ---
@@ -906,6 +1005,111 @@ SELECT state, COUNT(*) FROM files GROUP BY state;
 ```
 
 The CLI covers most day-to-day operations — direct SQL is only needed for bulk inspection or debugging.
+
+---
+
+## Troubleshooting
+
+### `libris: command not found`
+
+pip installs scripts to a location that may not be on your `PATH`. Find the correct bin directory and add it:
+
+```bash
+python3 -m site --user-base   # prints something like /Users/you/Library/Python/3.12
+# Add <user-base>/bin to your PATH:
+export PATH="$PATH:$(python3 -m site --user-base)/bin"
+```
+
+Add the `export` line to your shell profile (`~/.zshrc` or `~/.bashrc`) to make it permanent.
+
+---
+
+### `calibredb: command not found`
+
+On macOS, Calibre installs as an app bundle. Add it to your PATH:
+
+```bash
+export PATH="$PATH:/Applications/calibre.app/Contents/MacOS"
+```
+
+On Linux, if you installed via the official installer: `~/.local/share/calibre/bin` or `/opt/calibre`. Check the Calibre [download page](https://calibre-ebook.com/download_linux) for the exact path.
+
+---
+
+### Confidence scores are always low (0.00–0.45)
+
+This usually means Google Books is rate-limiting you (HTTP 429). Open Library is the fallback — it works but scores lower without the cross-source agreement bonus.
+
+Fix options:
+1. **Add a Google Books API key** — 1,000 requests/day, free:
+   ```yaml
+   metadata:
+     google_books_api_key: YOUR_KEY_HERE
+   ```
+   Or let `libris rematch` walk you through it interactively (`[k]` at the rate-limit prompt).
+
+2. **Lower the confidence threshold temporarily** for testing:
+   ```yaml
+   metadata:
+     confidence_threshold: 0.50
+   ```
+   Reset to `0.75` for normal use.
+
+3. **Use `libris rematch`** for files already in the review queue — it prompts interactively and lets you wait for the rate limit to clear.
+
+---
+
+### Files keep going to review instead of auto-importing
+
+Check the score in `list-review`. If matches look correct but scores are low, see the rate-limit advice above. If matches are wrong (wrong title/author):
+
+1. Run `libris rematch --id N` to search manually with a corrected query.
+2. Try `Title by Author` format — routing the author to the API's author field gives much better results.
+3. If the filename is the problem, rename it to a recognisable title before importing.
+
+---
+
+### State DB is corrupt
+
+If Libris reports a corrupt state database:
+
+```
+❌  State DB at '.../libris.db' is corrupt or unreadable
+```
+
+The database is a rebuildable cache — it's safe to delete and start fresh:
+
+```bash
+mv ~/books/libris.db ~/books/libris.db.bak   # keep a backup just in case
+libris run                                    # rebuilds from scratch
+```
+
+Files already imported into Calibre are unaffected. Files in `review/` and `failed/` will reappear on the next run or scan.
+
+---
+
+### `import-one` says "refusing to import symlink"
+
+Libris rejects symlinks in the incoming directory as a security measure — a symlink could point to arbitrary files on the host. Copy the actual file instead of symlinking it.
+
+---
+
+### Multi-part audiobook won't combine
+
+- Check that part files have consistent markers in their names (`part 1 of 3`, `disc 1 of 2`, etc.)
+- Run `libris list-pending` to see the current state of each group
+- Use `libris combine-parts --id N` to force-combine whatever parts have arrived
+- If a part is stuck in `failed/`, run `libris recover` to move it back to review first
+
+---
+
+### ntfy notifications not arriving
+
+Run `libris check-config` — it sends a test notification and reports the exact error if it fails. Common issues:
+
+- **Topic typo** — the topic in config must match exactly what you subscribed to in the ntfy app
+- **Auth token required** — if you use a private topic, set `auth_token` in config
+- **Self-hosted server** — update `base_url` to point to your server
 
 ---
 
