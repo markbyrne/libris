@@ -240,12 +240,21 @@ else
         fi
     fi
 
-    if [[ -n "$GITHUB_TOKEN" ]]; then
-        INSTALL_TARGET="git+https://x-access-token:${GITHUB_TOKEN}@github.com/markbyrne/libris@${LIBRIS_VERSION}"
-    else
-        INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
-    fi
+    INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
     info "Installing libris ${LIBRIS_VERSION} from GitHub…"
+
+    # If a token was provided, wire it via git's insteadOf so credentials are
+    # handled by git's credential layer rather than embedded in the URL string
+    # (URL-embedding breaks when the token contains special characters).
+    if [[ -n "$GITHUB_TOKEN" ]]; then
+        git config --global \
+            "url.https://x-access-token:${GITHUB_TOKEN}@github.com/markbyrne/libris.insteadOf" \
+            "https://github.com/markbyrne/libris"
+        # Clean up the rewrite rule after install regardless of success/failure
+        trap 'git config --global --unset-all \
+            "url.https://x-access-token:${GITHUB_TOKEN}@github.com/markbyrne/libris.insteadOf" \
+            2>/dev/null || true' EXIT
+    fi
 fi
 
 # Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
