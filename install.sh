@@ -8,6 +8,12 @@
 set -uo pipefail
 IFS=$'\n\t'
 
+# ── Re-attach stdin to terminal when piped from curl ─────────────────────────
+# Without this, `read` gets EOF from the pipe and auto-accepts all prompts.
+if [[ ! -t 0 ]]; then
+    exec < /dev/tty
+fi
+
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
@@ -191,13 +197,12 @@ fi
 # Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
 VENV_DIR="$HOME/.local/share/libris/venv"
 EXTERNALLY_MANAGED=false
-if $PIP_CMD install --dry-run "$INSTALL_TARGET" &>/dev/null; then
-    : # pip works fine, proceed normally
-elif python3 -m pip install --dry-run "$INSTALL_TARGET" 2>&1 | grep -q "externally-managed"; then
+PYTHON_PREFIX="$(python3 -c 'import sys; print(sys.prefix)')"
+if [[ -f "$PYTHON_PREFIX/EXTERNALLY-MANAGED" ]]; then
     EXTERNALLY_MANAGED=true
 fi
 
-if $EXTERNALLY_MANAGED; then
+if [[ "$EXTERNALLY_MANAGED" == true ]]; then
     info "System Python is externally managed — installing into a virtual environment…"
     info "Venv: $VENV_DIR"
     python3 -m venv "$VENV_DIR"
