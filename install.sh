@@ -8,12 +8,6 @@
 set -uo pipefail
 IFS=$'\n\t'
 
-# ── Re-attach stdin to terminal when piped from curl ─────────────────────────
-# Without this, `read` gets EOF from the pipe and auto-accepts all prompts.
-if [[ ! -t 0 ]]; then
-    exec < /dev/tty
-fi
-
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
@@ -34,7 +28,7 @@ ask() {
     else
         printf "  %s: " "$prompt"
     fi
-    read -r value
+    read -r value < /dev/tty
     printf '%s' "${value:-$default}"
 }
 
@@ -42,7 +36,7 @@ ask_secret() {
     # Like ask but hides input (for API keys / tokens)
     local prompt="$1" value
     printf "  %s (hidden, Enter to skip): " "$prompt"
-    read -rs value; echo ""
+    read -rs value < /dev/tty; echo ""
     printf '%s' "$value"
 }
 
@@ -53,7 +47,7 @@ ask_yn() {
     [[ "$default" == "y" ]] && yes_label="Y" || yes_label="y"
     [[ "$default" == "n" ]] && no_label="N"  || no_label="n"
     printf "  %s [%s/%s]: " "$prompt" "$yes_label" "$no_label"
-    read -r value
+    read -r value < /dev/tty
     value="${value:-$default}"
     [[ "$value" =~ ^[Yy] ]]
 }
