@@ -374,6 +374,8 @@ def import_one(file_path: Path, config_path: Optional[Path]) -> None:
     path = _resolve_config(config_path)
     config = load_config(path)
     _setup_logging(config.log_level)
+    if file_path.is_symlink():
+        _die(f"'{file_path}' is a symlink — refusing to process. Pass the real file path.")
     pipeline = Pipeline(config)
     record = pipeline.process_file(file_path.resolve())
 
