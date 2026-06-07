@@ -178,7 +178,11 @@ hr
 
 echo ""
 info "Installing libris from current directory…"
-$PIP_CMD install --quiet .
+if ! $PIP_CMD install --quiet .; then
+    error "pip install failed — check the output above for details."
+    error "Common causes: wrong Python environment, missing build tools, or network error."
+    exit 1
+fi
 if command -v libris &>/dev/null; then
     LIBRIS_BIN="$(command -v libris)"
     success "libris installed  ($LIBRIS_BIN)"

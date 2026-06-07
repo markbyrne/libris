@@ -295,7 +295,7 @@ LIBRIS_MULTIPART_TIMEOUT_HOURS=24
 libris check-config
 ```
 
-Prints all resolved config values, confirms calibredb is reachable, and sends a test ntfy notification if configured.
+Prints all resolved config values, warns if paths or the Calibre library are missing, and sends a test ntfy notification if configured.
 
 ---
 

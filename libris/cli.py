@@ -351,6 +351,7 @@ def _prompt_rate_limit(error: RateLimitError, config_path: Path, config) -> str:
 # ---------------------------------------------------------------------------
 
 @click.group()
+@click.version_option(package_name="libris")
 def main() -> None:
     """Libris — intelligent book and audiobook organiser for Calibre."""
 
@@ -442,6 +443,16 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  ntfy topic:     {config.ntfy.topic or '(not set)'}")
     click.echo(f"  ntfy enabled:   {config.ntfy.enabled}")
     click.echo(f"  Log level:      {config.log_level}")
+
+    # ── calibredb reachability check ─────────────────────────────────────
+    click.echo()
+    click.echo("  Checking calibredb…  ", nl=False)
+    try:
+        _cal = get_calibre(config.calibre)
+        _cal.list_books()
+        click.echo(click.style("✅  reachable", fg="green"))
+    except Exception as _exc:
+        click.echo(click.style(f"❌  not reachable: {_exc}", fg="red"))
 
     # ── ntfy connectivity check ───────────────────────────────────────────
     if config.ntfy.enabled and config.ntfy.topic:
