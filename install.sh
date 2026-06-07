@@ -188,10 +188,35 @@ else
     INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
 fi
 
-if ! $PIP_CMD install --quiet "$INSTALL_TARGET"; then
-    error "pip install failed — check the output above for details."
-    error "Common causes: wrong Python environment, missing build tools, or network error."
-    exit 1
+# Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
+VENV_DIR="$HOME/.local/share/libris/venv"
+EXTERNALLY_MANAGED=false
+if $PIP_CMD install --dry-run "$INSTALL_TARGET" &>/dev/null; then
+    : # pip works fine, proceed normally
+elif python3 -m pip install --dry-run "$INSTALL_TARGET" 2>&1 | grep -q "externally-managed"; then
+    EXTERNALLY_MANAGED=true
+fi
+
+if $EXTERNALLY_MANAGED; then
+    info "System Python is externally managed — installing into a virtual environment…"
+    info "Venv: $VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+    VENV_PIP="$VENV_DIR/bin/pip"
+    VENV_LIBRIS="$VENV_DIR/bin/libris"
+    if ! "$VENV_PIP" install --quiet "$INSTALL_TARGET"; then
+        error "pip install into venv failed — check the output above for details."
+        exit 1
+    fi
+    # Symlink into ~/.local/bin so it's on PATH
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$VENV_LIBRIS" "$HOME/.local/bin/libris"
+    PIP_CMD="$VENV_PIP"
+else
+    if ! $PIP_CMD install --quiet "$INSTALL_TARGET"; then
+        error "pip install failed — check the output above for details."
+        error "Common causes: wrong Python environment, missing build tools, or network error."
+        exit 1
+    fi
 fi
 if command -v libris &>/dev/null; then
     LIBRIS_BIN="$(command -v libris)"
