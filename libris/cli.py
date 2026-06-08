@@ -17,6 +17,8 @@ Commands:
   libris revert-import   — Remove a book from Calibre and return it to review/
   libris search          — Search the Calibre library (uses library path from config)
   libris rematch         — Interactively re-query metadata APIs for a review item
+  libris migrate-libris  — Move Libris dirs and DB to a new root; update config
+  libris migrate-library — Move Calibre library files (full, books-only, or db-only)
 """
 
 from __future__ import annotations
@@ -2524,6 +2526,441 @@ def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
     click.echo()
 
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# migrate-libris — move Libris dirs and DB to a new root
+# ---------------------------------------------------------------------------
+
+@main.command("migrate-libris")
+@click.argument("to_path", type=click.Path(path_type=Path))
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print what would be moved without making any changes")
+@_CONFIG_OPTION
+def migrate_libris(to_path: Path, dry_run: bool, config_path: Optional[Path]) -> None:
+    """Move Libris operational directories and state DB to a new root.
+
+    Moves incoming/, staging/, review/, failed/, and the state database to
+    TO_PATH, then updates the config file in-place so all paths reflect the
+    new location.  Existing files at the destination are preserved (merge).
+
+    \b
+      libris migrate-libris ~/new-libris --dry-run  # plan only
+      libris migrate-libris ~/new-libris            # execute
+      libris check-config                            # verify
+    """
+    import os as _os
+    import subprocess as _sp
+
+    cfg_path = _resolve_config(config_path)
+    config = load_config(cfg_path)
+    to_path = to_path.expanduser().resolve()
+
+    # ── Daemon check ─────────────────────────────────────────────────────
+    pid_file = config.paths.staging_dir.parent / "libris.pid"
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            _os.kill(pid, 0)   # signal 0 = existence check
+            click.echo(click.style(
+                f"  ⚠   libris daemon appears to be running (PID {pid}).\n"
+                "      Stop it with 'libris stop' (or kill the process) before migrating.",
+                fg="yellow",
+            ))
+            if not click.confirm("  Continue anyway?", default=False):
+                raise SystemExit(1)
+        except (OSError, ValueError):
+            pass  # PID file stale or unreadable — safe to continue
+
+    # ── Determine paths to migrate ────────────────────────────────────────
+    dir_mappings: list[tuple[str, Path, Path]] = []   # (config_key, old, new)
+    file_mappings: list[tuple[str, Path, Path]] = []  # (config_key, old, new)
+
+    def _new_path(old: Path) -> Path:
+        """Compute destination path: to_path / <last component(s)>."""
+        try:
+            # Find common root of all libris paths and preserve relative structure
+            return to_path / old.relative_to(old.parents[1])
+        except ValueError:
+            # Path not under a two-level parent — just use the basename
+            return to_path / old.name
+
+    # Compute new paths by finding the common ancestor of all libris dirs
+    libris_dirs = [
+        config.watcher.incoming_dir,
+        config.paths.staging_dir,
+        config.paths.review_dir,
+        config.paths.failed_dir,
+    ]
+    # Find common parent (the "libris root")
+    try:
+        common = Path(_os.path.commonpath([str(d) for d in libris_dirs]))
+    except ValueError:
+        common = None
+
+    if common and common != Path("/") and common != Path.home():
+        # All dirs share a root — preserve structure under to_path
+        for label, old in [
+            ("watcher.incoming_dir", config.watcher.incoming_dir),
+            ("paths.staging_dir",    config.paths.staging_dir),
+            ("paths.review_dir",     config.paths.review_dir),
+            ("paths.failed_dir",     config.paths.failed_dir),
+        ]:
+            try:
+                rel = old.relative_to(common)
+                dir_mappings.append((label, old, to_path / rel))
+            except ValueError:
+                dir_mappings.append((label, old, to_path / old.name))
+        # DB: place at to_path / <db_filename>
+        file_mappings.append(
+            ("paths.state_db", config.paths.state_db, to_path / config.paths.state_db.name)
+        )
+    else:
+        # Paths are scattered — move each to to_path/<name>
+        for label, old in [
+            ("watcher.incoming_dir", config.watcher.incoming_dir),
+            ("paths.staging_dir",    config.paths.staging_dir),
+            ("paths.review_dir",     config.paths.review_dir),
+            ("paths.failed_dir",     config.paths.failed_dir),
+        ]:
+            dir_mappings.append((label, old, to_path / old.name))
+        file_mappings.append(
+            ("paths.state_db", config.paths.state_db, to_path / config.paths.state_db.name)
+        )
+
+    # ── Summary table ─────────────────────────────────────────────────────
+    click.echo()
+    click.echo(f"  {'DRY RUN — ' if dry_run else ''}migrate-libris → {to_path}")
+    click.echo(_hr())
+    click.echo()
+    all_moves = dir_mappings + file_mappings
+    for label, old, new in all_moves:
+        exists = "✓" if old.exists() else click.style("✗ missing", fg="yellow")
+        arrow = click.style("→", fg="cyan")
+        click.echo(f"  {label}")
+        click.echo(f"    {old}  {arrow}  {new}  ({exists})")
+    click.echo()
+
+    if dry_run:
+        click.echo("  Dry run complete — no changes made.")
+        click.echo()
+        return
+
+    if not click.confirm("  Proceed with migration?", default=True):
+        raise SystemExit(0)
+
+    click.echo()
+
+    # ── Execute moves ─────────────────────────────────────────────────────
+    to_path.mkdir(parents=True, exist_ok=True)
+    for label, old, new in dir_mappings:
+        if old.exists():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(old), str(new), dirs_exist_ok=True)
+            shutil.rmtree(str(old))
+            click.echo(f"  ✓ {old.name}  →  {new}")
+        else:
+            click.echo(click.style(f"  ⚠ {old.name} — source missing, skipped", fg="yellow"))
+
+    for label, old, new in file_mappings:
+        if old.exists():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(old), str(new))
+            old.unlink()
+            click.echo(f"  ✓ {old.name}  →  {new}")
+        else:
+            click.echo(click.style(f"  ⚠ {old.name} — source missing, skipped", fg="yellow"))
+
+    # ── Update config ─────────────────────────────────────────────────────
+    click.echo()
+    _update_config_paths(cfg_path, {
+        label: new for label, _old, new in all_moves
+    })
+    click.echo(f"  ✅  Config updated: {cfg_path}")
+    click.echo(f"      Run 'libris check-config' to verify.")
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# migrate-library — move Calibre library files
+# ---------------------------------------------------------------------------
+
+@main.command("migrate-library")
+@click.argument("from_path", type=click.Path(path_type=Path))
+@click.argument("to_path", type=click.Path(path_type=Path))
+@click.option("--books-only", "books_only", is_flag=True, default=False,
+              help="Move book files only; metadata.db stays at from_path. "
+                   "Enables split-library mode in config (Issue #18).")
+@click.option("--db-only", "db_only", is_flag=True, default=False,
+              help="Move metadata.db only; book files stay at from_path.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print what would be moved without making any changes")
+@_CONFIG_OPTION
+def migrate_library(
+    from_path: Path,
+    to_path: Path,
+    books_only: bool,
+    db_only: bool,
+    dry_run: bool,
+    config_path: Optional[Path],
+) -> None:
+    """Move Calibre library files to a new location and update the config.
+
+    Primary use case: move physical book files to an external drive while
+    keeping metadata.db on a fast local disk (calibre-web split-library mode).
+
+    \b
+    Modes:
+      (default)      Move everything (metadata.db + book files)
+      --books-only   Move book files only; enables split-library mode
+      --db-only      Move metadata.db only; book files stay put
+
+    \b
+    Examples:
+      # Move book files to external drive (split-library mode)
+      libris migrate-library /calibre-db /Volumes/ExtDrive/books --books-only
+
+      # Full library move
+      libris migrate-library ~/calibre ~/new/calibre
+
+      # Verify
+      libris check-config
+    """
+    if books_only and db_only:
+        _die("--books-only and --db-only cannot be used together.")
+
+    from_path = from_path.expanduser().resolve()
+    to_path   = to_path.expanduser().resolve()
+    cfg_path  = _resolve_config(config_path)
+    config    = load_config(cfg_path)
+
+    if not from_path.exists():
+        _die(f"from_path does not exist: {from_path}")
+
+    # ── Describe what will move ───────────────────────────────────────────
+    mode_label = "books only" if books_only else ("DB only" if db_only else "full library")
+    click.echo()
+    click.echo(f"  {'DRY RUN — ' if dry_run else ''}migrate-library ({mode_label})")
+    click.echo(f"    from: {from_path}")
+    click.echo(f"    to:   {to_path}")
+    click.echo()
+
+    if books_only:
+        click.echo("  Book files will be moved; metadata.db stays at from_path.")
+        click.echo("  Config will gain split-library mode:")
+        click.echo(f"    library_db_path: {from_path}")
+        click.echo(f"    book_file_path:  {to_path}")
+    elif db_only:
+        click.echo("  metadata.db (and *.db files) will be moved; book files stay at from_path.")
+        click.echo(f"  Config: library_db_path → {to_path}")
+    else:
+        click.echo("  Entire library will be moved (metadata.db + all book files).")
+        click.echo(f"  Config: library_db_path → {to_path}")
+    click.echo()
+
+    if dry_run:
+        # Estimate file count
+        try:
+            if books_only:
+                items = [
+                    p for p in from_path.rglob("*")
+                    if p.is_file() and p.name != "metadata.db"
+                    and not p.name.startswith("metadata_db_backup")
+                ]
+            elif db_only:
+                items = [p for p in from_path.iterdir()
+                         if p.is_file() and (p.suffix == ".db" or p.name.startswith("metadata"))]
+            else:
+                items = list(from_path.rglob("*") if from_path.is_dir() else [])
+            click.echo(f"  Would move ~{len(items)} file(s).")
+        except Exception:
+            pass
+        click.echo("  Dry run complete — no changes made.")
+        click.echo()
+        return
+
+    if not click.confirm("  Proceed with migration?", default=True):
+        raise SystemExit(0)
+
+    click.echo()
+    to_path.mkdir(parents=True, exist_ok=True)
+
+    if books_only:
+        # Move all files EXCEPT metadata.db and *.db backup files
+        n_moved = 0
+        for src in sorted(from_path.rglob("*")):
+            if not src.is_file():
+                continue
+            if src.name == "metadata.db" or src.name.startswith("metadata_db_backup"):
+                continue
+            rel = src.relative_to(from_path)
+            dest = to_path / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            n_moved += 1
+        # Clean up now-empty directories (but not from_path itself)
+        for dirpath in sorted(from_path.rglob("*"), reverse=True):
+            if dirpath.is_dir() and dirpath != from_path:
+                try:
+                    dirpath.rmdir()
+                except OSError:
+                    pass
+        click.echo(f"  ✓ {n_moved} file(s) moved to {to_path}")
+
+        # Update config for split-library mode
+        _update_config_calibre_split(cfg_path, str(from_path), str(to_path))
+        click.echo(f"  ✅  Config updated to split-library mode: {cfg_path}")
+
+    elif db_only:
+        # Move only the DB files
+        n_moved = 0
+        for src in from_path.iterdir():
+            if src.is_file() and (src.suffix == ".db" or src.name.startswith("metadata")):
+                dest = to_path / src.name
+                shutil.move(str(src), str(dest))
+                click.echo(f"  ✓ {src.name}")
+                n_moved += 1
+        click.echo(f"  ✓ {n_moved} file(s) moved to {to_path}")
+
+        # Update config: library_db_path → to_path
+        _update_config_paths(cfg_path, {
+            "calibre.library_db_path": to_path,
+            "calibre.library_path": to_path,  # update legacy key too if present
+        })
+        click.echo(f"  ✅  Config updated: {cfg_path}")
+
+    else:
+        # Full library move
+        shutil.copytree(str(from_path), str(to_path), dirs_exist_ok=True)
+        shutil.rmtree(str(from_path))
+        click.echo(f"  ✓ Library moved to {to_path}")
+
+        # Update config: library_db_path → to_path
+        _update_config_paths(cfg_path, {
+            "calibre.library_db_path": to_path,
+            "calibre.library_path": to_path,  # update legacy key too if present
+        })
+        click.echo(f"  ✅  Config updated: {cfg_path}")
+
+    click.echo(f"      Run 'libris check-config' to verify.")
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# Config file patching helpers
+# ---------------------------------------------------------------------------
+
+def _update_config_paths(config_path: Path, updates: dict) -> None:
+    """Rewrite specific config keys in-place, preserving YAML comments.
+
+    *updates* maps dotted config keys (e.g. 'paths.staging_dir',
+    'calibre.library_db_path') to their new Path values.  The rewrite uses
+    targeted line-by-line regex replacement so inline comments are preserved.
+
+    For nested keys (e.g. 'paths.staging_dir'), the function matches the YAML
+    line that starts with 'staging_dir:' (the leaf key) inside the right
+    section, and replaces the value portion.
+    """
+    import re as _re
+
+    text = config_path.read_text()
+    lines = text.splitlines(keepends=True)
+
+    # Build a flat map of leaf_key → new_value (str) from the dotted keys
+    leaf_updates: dict[str, str] = {}
+    for dotted_key, new_val in updates.items():
+        leaf = dotted_key.split(".")[-1]
+        leaf_updates[leaf] = str(new_val)
+
+    result = []
+    for line in lines:
+        replaced = False
+        for leaf, new_val in leaf_updates.items():
+            # Match: optional leading spaces, the key, colon, then the old value
+            # Captures trailing comments so they are preserved.
+            m = _re.match(
+                r'^(\s*' + _re.escape(leaf) + r'\s*:\s*)([^#\n]*)(#.*)?(\n?)$',
+                line,
+            )
+            if m:
+                prefix, _old_val, comment, newline = m.groups()
+                comment_part = ("  " + comment) if comment else ""
+                result.append(f"{prefix}{new_val}{comment_part}{newline}")
+                replaced = True
+                break
+        if not replaced:
+            result.append(line)
+
+    config_path.write_text("".join(result))
+
+
+def _update_config_calibre_split(config_path: Path, db_path: str, books_path: str) -> None:
+    """Transition a config from single library_path to split library_db_path / book_file_path.
+
+    If the config has:
+        calibre:
+          mode: local
+          library_path: /old/path      # or library_db_path
+
+    It becomes:
+        calibre:
+          mode: local
+          library_db_path: /old/path   # renamed from library_path if needed
+          book_file_path: /new/books   # added
+
+    If library_path key is present it's renamed to library_db_path.
+    If book_file_path already exists it is updated.
+    If neither exists, both are written after the 'mode:' line.
+    """
+    import re as _re
+
+    text = config_path.read_text()
+
+    # Step 1: rename library_path → library_db_path (only in calibre section)
+    # We match the line to avoid renaming an unrelated key in another section
+    if _re.search(r'^\s*library_path\s*:', text, _re.MULTILINE):
+        text = _re.sub(
+            r'^(\s*)library_path(\s*:)',
+            r'\1library_db_path\2',
+            text,
+            flags=_re.MULTILINE,
+        )
+
+    # Step 2: update library_db_path value
+    if _re.search(r'^\s*library_db_path\s*:', text, _re.MULTILINE):
+        text = _re.sub(
+            r'^(\s*library_db_path\s*:\s*)([^#\n]*)(#.*)?$',
+            lambda m: f"{m.group(1)}{db_path}{'  ' + m.group(3) if m.group(3) else ''}",
+            text,
+            flags=_re.MULTILINE,
+        )
+    else:
+        # No library_db_path or library_path — insert after 'mode:' line in calibre section
+        text = _re.sub(
+            r'^(\s*mode\s*:.*calibre.*\n)',
+            r'\1' + f"  library_db_path: {db_path}\n",
+            text,
+            flags=_re.MULTILINE,
+        )
+
+    # Step 3: add or update book_file_path
+    if _re.search(r'^\s*book_file_path\s*:', text, _re.MULTILINE):
+        text = _re.sub(
+            r'^(\s*book_file_path\s*:\s*)([^#\n]*)(#.*)?$',
+            lambda m: f"{m.group(1)}{books_path}{'  ' + m.group(3) if m.group(3) else ''}",
+            text,
+            flags=_re.MULTILINE,
+        )
+    else:
+        # Insert book_file_path after library_db_path line
+        text = _re.sub(
+            r'^(\s*library_db_path\s*:.*\n)',
+            r'\1' + f"  book_file_path: {books_path}\n",
+            text,
+            flags=_re.MULTILINE,
+        )
+
+    config_path.write_text(text)
 
 
 # ---------------------------------------------------------------------------
