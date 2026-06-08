@@ -332,7 +332,7 @@ LIBRIS_MULTIPART_TIMEOUT_HOURS=24
 libris check-config
 ```
 
-Prints all resolved config values, warns if paths or the Calibre library are missing, and sends a test ntfy notification if configured. When `book_file_path` is set (split-library mode), it is shown alongside `Library path` with an existence check.
+Prints all resolved config values — including Google Books API key status (enabled/disabled, key never printed) and `book_file_path` when in split-library mode — warns if paths are missing, and sends a test ntfy notification if configured.
 
 ---
 
