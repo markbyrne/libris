@@ -446,14 +446,27 @@ if [[ "$SKIP_CONFIG" == false ]]; then
   docker_container: $DOCKER_CONTAINER"
     else
         CALIBRE_MODE="local"
-        echo -e "  ${DIM}📚 Calibre Library — where Calibre stores your book files. Must match${NC}"
-        echo -e "  ${DIM}   your Calibre settings (Preferences → Libraries).${NC}"
-        LIBRARY_PATH="$(ask "Calibre library path" "$HOME/Calibre Library")"
+        echo -e "  ${DIM}📚 Calibre Library DB path — where metadata.db lives. Must match${NC}"
+        echo -e "  ${DIM}   Calibre Preferences → Libraries (or calibre-web 'Location of Calibre Database').${NC}"
+        LIBRARY_PATH="$(ask "Calibre library DB path" "$HOME/Calibre Library")"
         LIBRARY_PATH="${LIBRARY_PATH/#\~/$HOME}"
+        echo ""
+        echo -e "  ${DIM}📂 Book file path — where physical book files (EPUB, M4B, etc.) are stored.${NC}"
+        echo -e "  ${DIM}   Only needed if you use calibre-web's 'Separate Book Files from Library'${NC}"
+        echo -e "  ${DIM}   feature. Leave blank if your library DB and book files share the same path.${NC}"
+        BOOK_FILE_PATH="$(ask "Separate book file path (leave blank if unused)" "")"
+        BOOK_FILE_PATH="${BOOK_FILE_PATH/#\~/$HOME}"
         DOCKER_CONTAINER=""
-        CALIBRE_YAML="calibre:
+        if [[ -n "$BOOK_FILE_PATH" ]]; then
+            CALIBRE_YAML="calibre:
   mode: local
-  library_path: $LIBRARY_PATH"
+  library_db_path: $LIBRARY_PATH    # Calibre DB (metadata.db); used with --with-library
+  book_file_path: $BOOK_FILE_PATH   # physical book files; calibre-web 'Separate Book Files'"
+        else
+            CALIBRE_YAML="calibre:
+  mode: local
+  library_db_path: $LIBRARY_PATH    # must match Calibre Preferences → Libraries"
+        fi
     fi
 
     echo ""

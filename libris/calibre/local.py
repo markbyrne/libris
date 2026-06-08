@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -22,9 +23,17 @@ class LocalCalibre(CalibreBackend):
 
     def __init__(self, config: CalibreConfig) -> None:
         self._config = config
-        if config.library_path is None:
-            raise ValueError("LocalCalibre requires calibre.library_path to be set")
-        self._library = config.library_path
+        if config.library_db_path is None:
+            raise ValueError(
+                "LocalCalibre requires calibre.library_db_path to be set "
+                "(or the legacy calibre.library_path key)"
+            )
+        # _library — where metadata.db lives; used with --with-library for all calibredb calls
+        self._library: Path = config.library_db_path
+        # _book_files — where physical book files (EPUB, M4B, …) are stored.
+        # Equals _library unless the user has configured calibre-web's
+        # "Separate Book Files from Library" feature (Issue #18).
+        self._book_files: Path = config.effective_book_path or config.library_db_path
 
     def add_book(self, file_path: Path) -> int:
         # Do NOT pass --automerge ignore.  When calibredb's automerge detects
@@ -67,7 +76,85 @@ class LocalCalibre(CalibreBackend):
                 f"stdout: {result.stdout.strip()!r}"
             )
         log.info("calibre.local.added", extra={"file": str(file_path), "book_id": book_id})
+
+        # Split-path mode: move physical book files from library_db_path to book_file_path.
+        # calibredb add always places files under _library (metadata.db location).
+        # If book_file_path differs, relocate the files so calibre-web can find them.
+        if self._book_files != self._library:
+            self._relocate_to_book_files(book_id)
+
         return book_id
+
+    # ------------------------------------------------------------------
+    # Split-path helpers (Issue #18)
+    # ------------------------------------------------------------------
+
+    def _get_format_paths(self, book_id: int) -> list[Path]:
+        """Return the absolute paths of all formats calibredb has stored for *book_id*.
+
+        calibredb stores files under _library after 'add'.  This helper is used
+        by _relocate_to_book_files to find what was just added.
+        """
+        import json as _json
+
+        cmd = [
+            "calibredb", "list",
+            "--for-machine",
+            "--search", f"id:{book_id}",
+            "--fields", "formats",
+            "--with-library", str(self._library),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.local.get_format_paths_failed", extra={"stderr": result.stderr})
+            return []
+        try:
+            rows = _json.loads(result.stdout)
+            if not rows:
+                return []
+            raw_formats = rows[0].get("formats", [])
+            if isinstance(raw_formats, str):
+                raw_formats = [raw_formats] if raw_formats else []
+            return [Path(p) for p in raw_formats if p]
+        except Exception as exc:
+            log.warning("calibre.local.get_format_paths_parse_error: %s", exc)
+            return []
+
+    def _relocate_to_book_files(self, book_id: int) -> None:
+        """Move book files from library_db_path into book_file_path after import.
+
+        calibredb always writes files into _library (the metadata.db location).
+        When book_file_path is configured separately (calibre-web split-library
+        mode), files must be moved so calibre-web can resolve them via the
+        relative path from book_file_path.
+
+        The relative path (Author/Title (id)/file.ext) is preserved, so
+        calibre-web's path resolution continues to work correctly.
+        """
+        for src in self._get_format_paths(book_id):
+            if not src.exists():
+                log.warning("calibre.local.relocate_src_missing: %s", src)
+                continue
+            try:
+                rel = src.relative_to(self._library)
+            except ValueError:
+                log.warning(
+                    "calibre.local.relocate_not_under_library: %s (library=%s)",
+                    src, self._library,
+                )
+                continue
+            dest = self._book_files / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            log.info(
+                "calibre.local.relocated",
+                extra={"src": str(src), "dest": str(dest), "book_id": book_id},
+            )
+            # Clean up the now-empty Author/Title(id)/ directory under library_db_path.
+            try:
+                src.parent.rmdir()
+            except OSError:
+                pass  # Non-empty or already gone — safe to ignore
 
     def set_metadata(self, book_id: int, result: MetadataResult) -> None:
         if book_id < 0:

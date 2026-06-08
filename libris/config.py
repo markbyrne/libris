@@ -36,11 +36,35 @@ class PathsConfig:
 @dataclass
 class CalibreConfig:
     mode: Literal["local", "docker"] = "local"
-    library_path: Path | None = None          # local mode: --with-library
+    # library_db_path — where metadata.db lives; used with --with-library.
+    # Also accepts the legacy YAML key 'library_path' (see load_config).
+    library_db_path: Path | None = None
+    # book_file_path — where physical book files (EPUB, M4B, etc.) should live.
+    # Used with calibre-web "Separate Book Files from Library" feature.
+    # If unset, defaults to library_db_path (i.e. no split — classic setup).
+    book_file_path: Path | None = None
     docker_container: str = "calibre-web"     # docker mode: container name
     # Maps host path prefixes → container path prefixes for docker mode.
     # Example: {"/media/pidrive/Books": "/books"}
     path_map: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def library_path(self) -> Path | None:
+        """Backward-compat alias for library_db_path.
+
+        Code that accesses config.calibre.library_path continues to work
+        without changes; update to library_db_path when convenient.
+        """
+        return self.library_db_path
+
+    @property
+    def effective_book_path(self) -> Path | None:
+        """Path where physical book files are stored.
+
+        Returns book_file_path if set; otherwise falls back to library_db_path.
+        Use this wherever book file I/O is needed (exports, format adds, etc.).
+        """
+        return self.book_file_path or self.library_db_path
 
 
 @dataclass
@@ -155,17 +179,31 @@ def load_config(config_path: Path) -> Config:
     if calibre_mode not in ("local", "docker"):
         raise ConfigError(f"calibre.mode must be 'local' or 'docker', got: {calibre_mode!r}")
 
-    lib_path_raw = os.environ.get("LIBRIS_CALIBRE_LIBRARY_PATH") or calibre_raw.get("library_path")
+    # Accept library_db_path (new) or library_path (legacy) — both map to library_db_path.
+    lib_db_raw = (
+        os.environ.get("LIBRIS_CALIBRE_LIBRARY_DB_PATH")
+        or os.environ.get("LIBRIS_CALIBRE_LIBRARY_PATH")
+        or calibre_raw.get("library_db_path")
+        or calibre_raw.get("library_path")
+    )
+    book_file_raw = (
+        os.environ.get("LIBRIS_CALIBRE_BOOK_FILE_PATH")
+        or calibre_raw.get("book_file_path")
+    )
     calibre = CalibreConfig(
         mode=calibre_mode,
-        library_path=Path(lib_path_raw).expanduser() if lib_path_raw else None,
+        library_db_path=Path(lib_db_raw).expanduser() if lib_db_raw else None,
+        book_file_path=Path(book_file_raw).expanduser() if book_file_raw else None,
         docker_container=os.environ.get("LIBRIS_CALIBRE_DOCKER_CONTAINER")
                          or calibre_raw.get("docker_container", "calibre-web"),
         path_map=calibre_raw.get("path_map") or {},
     )
 
-    if calibre.mode == "local" and calibre.library_path is None:
-        raise ConfigError("calibre.library_path is required when calibre.mode is 'local'")
+    if calibre.mode == "local" and calibre.library_db_path is None:
+        raise ConfigError(
+            "calibre.library_db_path (or legacy calibre.library_path) is required "
+            "when calibre.mode is 'local'"
+        )
     if calibre.mode == "docker" and not calibre.docker_container:
         raise ConfigError("calibre.docker_container is required when calibre.mode is 'docker'")
 
