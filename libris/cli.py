@@ -10,6 +10,8 @@ Commands:
   libris review-discard  — Delete a review-queue file (e.g. confirmed duplicate)
   libris reset           — Reset stuck PROCESSING records back to INCOMING
   libris recover         — Move failed files back to review/ for re-processing
+  libris list-failed     — Show all files in FAILED state
+  libris remove          — Permanently delete failed file(s) and their DB records
   libris list-pending    — Show multi-part audiobooks waiting for sibling parts
   libris combine-parts   — Force-combine a pending part group and import
   libris revert-import   — Remove a book from Calibre and return it to review/
@@ -1284,6 +1286,164 @@ def recover(
     click.echo("  Run 'libris rematch --id <N>' to fix the metadata match.")
     click.echo()
     sys.exit(1 if any_failed else 0)
+
+
+# ---------------------------------------------------------------------------
+# list-failed — read-only view of the FAILED queue
+# ---------------------------------------------------------------------------
+
+def _age_str(created_at) -> str:
+    """Return a human-readable age string like '2d 4h' or '3h 12m'."""
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=_tz.utc)
+    delta = now - created_at
+    total_secs = int(delta.total_seconds())
+    days, rem = divmod(total_secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {mins}m"
+    return f"{mins}m"
+
+
+@main.command("list-failed")
+@_CONFIG_OPTION
+def list_failed(config_path: Optional[Path]) -> None:
+    """Show all files currently in FAILED state.
+
+    Displays each file, its error message, and how long it has been there.
+    Use 'libris recover' to move files back to review/, or
+    'libris remove' to permanently delete them.
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+    records = store.list_by_state(FileState.FAILED)
+    store.close()
+
+    click.echo()
+    if not records:
+        click.echo("  No files in failed state.")
+        click.echo()
+        return
+
+    live = [(r, Path(r.current_path).exists()) for r in records]
+    stale_count = sum(1 for _, exists in live if not exists)
+
+    click.echo(f"  {len(records)} file(s) in failed state")
+    click.echo(_hr())
+    click.echo()
+    for i, (r, exists) in enumerate(live, 1):
+        name = Path(r.current_path).name
+        age = _age_str(r.created_at)
+        if not exists:
+            click.echo(click.style(f"  [{i}]  {name}  (file missing — {age} ago)", dim=True))
+        else:
+            click.echo(f"  [{i}]  {name}  ({age} ago)")
+        if r.error_msg:
+            click.echo(f"        Error:  {r.error_msg[:120]}")
+        if not exists:
+            click.echo(click.style(f"        libris remove --id {i}", dim=True))
+        click.echo()
+
+    click.echo(_hr())
+    click.echo("  Recover by ID:   libris recover --id <N>")
+    click.echo("  Recover all:     libris recover --all")
+    click.echo("  Remove by ID:    libris remove --id <N>")
+    click.echo("  Remove chaff:    libris remove --chaff")
+    click.echo("  Remove all:      libris remove --all")
+    if stale_count:
+        click.echo()
+        click.echo(click.style(
+            f"  ⚠   {stale_count} record(s) with missing files — run 'libris remove --id <N>' to clean up.",
+            fg="yellow",
+        ))
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# remove — permanently delete failed files and their DB records
+# ---------------------------------------------------------------------------
+
+@main.command("remove")
+@click.option("--id", "remove_id", type=int, default=None,
+              help="Remove a specific failed file by its list-failed position")
+@click.option("--all", "remove_all", is_flag=True, default=False,
+              help="Remove all files in the failed queue")
+@click.option("--chaff", "remove_chaff", is_flag=True, default=False,
+              help="Remove all failed files whose filenames match known chaff patterns")
+@_CONFIG_OPTION
+def remove(
+    remove_id: Optional[int],
+    remove_all: bool,
+    remove_chaff: bool,
+    config_path: Optional[Path],
+) -> None:
+    """Permanently delete failed file(s) and their database records.
+
+    Unlike 'recover', this destroys the file — use it for files you are
+    certain you do not want (junk, confirmed duplicates, chaff).
+
+    \b
+      libris remove --id 1       # remove one specific failed file
+      libris remove --all        # remove every file in the failed queue
+      libris remove --chaff      # remove all chaff (README, NFO, images, etc.)
+    """
+    n_flags = sum([remove_id is not None, remove_all, remove_chaff])
+    if n_flags == 0:
+        _die(
+            "Provide one of: --id <N>, --all, or --chaff\n"
+            "  Run 'libris list-failed' to see the failed queue."
+        )
+    if n_flags > 1:
+        _die("Only one of --id, --all, or --chaff may be used at a time.")
+
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+    records = store.list_by_state(FileState.FAILED)
+
+    if not records:
+        store.close()
+        click.echo("\n  Failed queue is empty.\n")
+        return
+
+    # Build the target list
+    if remove_id is not None:
+        if remove_id < 1 or remove_id > len(records):
+            store.close()
+            _die(
+                f"ID {remove_id} out of range — {len(records)} failed file(s).\n"
+                "  Run 'libris list-failed' to see current IDs."
+            )
+        targets = [records[remove_id - 1]]
+    elif remove_chaff:
+        targets = [r for r in records if _is_chaff(Path(r.current_path).name)]
+        if not targets:
+            store.close()
+            click.echo("\n  No chaff found in the failed queue.\n")
+            return
+    else:  # --all
+        targets = list(records)
+
+    click.echo()
+    n_removed = 0
+    for record in targets:
+        file_path = Path(record.current_path)
+        name = file_path.name
+        file_path.unlink(missing_ok=True)
+        store.delete(record.id)
+        click.echo(f"  🗑   {name}")
+        n_removed += 1
+
+    store.close()
+    click.echo()
+    click.echo(f"  {n_removed} file(s) removed.")
+    click.echo()
 
 
 @main.command("list-pending")

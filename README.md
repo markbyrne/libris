@@ -573,17 +573,49 @@ You'll see the current match and a query prompt. The most effective format is `T
 
 ---
 
+### `list-failed` — inspect failed files
+
+Shows all files that failed processing, why they failed, and how long they have been there.
+
+```bash
+libris list-failed
+```
+
+```
+  3 file(s) in failed state
+  ──────────────────────────────────────────────────
+
+  [1]  Downloaded from piratebay.epub  (2h 14m ago)
+        Error:  chaff detected — filename matches known non-book pattern
+
+  [2]  corrupted.epub  (15m ago)
+        Error:  calibredb exited with rc=1: Could not read ebook metadata
+
+  [3]  mystery-novel.epub  (1d 3h ago)
+        Error:  API lookup timed out after 3 retries
+
+  ──────────────────────────────────────────────────
+  Recover by ID:   libris recover --id <N>
+  Recover all:     libris recover --all
+  Remove by ID:    libris remove --id <N>
+  Remove chaff:    libris remove --chaff
+  Remove all:      libris remove --all
+```
+
+Stale records whose file is already gone from disk are shown dimmed with a suggested `libris remove --id <N>` hint.
+
+---
+
 ### `recover` — move failed files back to review
 
 Files that fail processing (e.g. due to a network error, rate limit, or chaff detection) are moved to `failed/`. Use `recover` to return them to `review/` so they can be rematched and imported.
 
+Run `libris list-failed` first to see the current failed queue and IDs.
+
 **Chaff detection:** Files with known non-book filenames (`Read Me!.epub`, `Downloaded from….epub`, `*.txt`, `*.nfo`, etc.) are automatically rejected and moved to `failed/` before any API call is made. If a file was incorrectly flagged, use `libris recover --id N` to move it back to review.
 
 ```bash
-# List failed files
-libris recover
-
-# Recover a specific file
+# Recover a specific file (use list-failed to find IDs)
 libris recover --id 1
 
 # Recover everything
@@ -608,6 +640,25 @@ libris recover --delete --all
 ```
 
 This marks the record as resolved in the state database without trying to move anything.
+
+---
+
+### `remove` — permanently delete failed files
+
+Permanently deletes failed file(s) from disk **and** removes their database records. Unlike `recover`, this is destructive — use it for files you are certain you do not want.
+
+```bash
+# Remove a single failed file by list-failed ID
+libris remove --id 1
+
+# Remove every file in the failed queue
+libris remove --all
+
+# Remove all failed files that match known chaff patterns (README, NFO, images, etc.)
+libris remove --chaff
+```
+
+Each deleted filename is echoed so you have a record of what was removed. A summary count is printed at the end.
 
 ---
 
