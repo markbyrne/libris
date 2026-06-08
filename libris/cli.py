@@ -553,6 +553,44 @@ def check_config(config_path: Optional[Path]) -> None:
         click.echo()
         click.echo(click.style("  ⚠   ntfy is enabled but no topic is set — notifications will be skipped.", fg="yellow"))
 
+    # ── directory reachability checks ────────────────────────────────────
+    click.echo()
+    click.echo("  Checking paths…")
+    _path_checks: list[tuple[str, Path | None]] = [
+        ("Incoming dir ", config.watcher.incoming_dir),
+        ("Staging dir  ", config.paths.staging_dir),
+        ("Review dir   ", config.paths.review_dir),
+        ("Failed dir   ", config.paths.failed_dir),
+        ("State DB dir ", config.paths.state_db.parent),
+        ("Library path ", config.calibre.library_db_path),
+    ]
+    if config.calibre.book_file_path:
+        _path_checks.append(("Book files   ", config.calibre.book_file_path))
+
+    for _label, _p in _path_checks:
+        if _p is not None and _p.exists():
+            click.echo(click.style(f"    ✅  {_label}: {_p}", fg="green"))
+        else:
+            click.echo(click.style(f"    ⚠   {_label}: {_p}  (not found)", fg="yellow"))
+
+    # ── Google Books API connectivity check ──────────────────────────────
+    click.echo()
+    click.echo("  Checking Google Books API…  ", nl=False)
+    _api_key = config.metadata.google_books_api_key
+    if not _api_key:
+        click.echo(click.style("⚠   not configured (unauthenticated mode)", fg="yellow"))
+    else:
+        try:
+            _gr = httpx.get(
+                "https://www.googleapis.com/books/v1/volumes",
+                params={"q": "test", "maxResults": "1", "key": _api_key},
+                timeout=8.0,
+            )
+            _gr.raise_for_status()
+            click.echo(click.style("✅  reachable", fg="green"))
+        except Exception as _exc:
+            click.echo(click.style(f"❌  failed: {_exc}", fg="red"))
+
     click.echo()
 
 

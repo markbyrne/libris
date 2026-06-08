@@ -332,7 +332,7 @@ LIBRIS_MULTIPART_TIMEOUT_HOURS=24
 libris check-config
 ```
 
-Prints all resolved config values — including Google Books API key status (enabled/disabled, key never printed) and `book_file_path` when in split-library mode — warns if paths are missing, and sends a test ntfy notification if configured.
+Prints all resolved config values — including Google Books API key status (enabled/disabled, key never printed) and `book_file_path` when in split-library mode — then checks every configured directory for reachability and (if an API key is set) probes the Google Books API. Sends a test ntfy notification if configured.
 
 ---
 
