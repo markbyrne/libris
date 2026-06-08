@@ -221,7 +221,7 @@ calibre:
   book_file_path:  /mnt/nas/books       # "Separate Book Files from Library" in calibre-web
 ```
 
-After each import Libris will automatically move the physical file from `library_db_path/Author/Title (id)/` into the matching path under `book_file_path`, preserving the relative structure that calibre-web uses to serve files. If `book_file_path` is not set, behaviour is identical to the classic single-path setup.
+After each import Libris automatically moves all files in the book's directory from `library_db_path/Author/Title (id)/` into the matching path under `book_file_path` — this includes the format file (`.epub`, `.m4b`), `cover.jpg`, and `metadata.opf`. calibre-web needs all three in `book_file_path` to display covers and serve downloads correctly. If `book_file_path` is not set, behaviour is identical to the classic single-path setup.
 
 ### Docker config (e.g. calibre-web in a container)
 

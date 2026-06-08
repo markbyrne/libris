@@ -121,40 +121,94 @@ class LocalCalibre(CalibreBackend):
             return []
 
     def _relocate_to_book_files(self, book_id: int) -> None:
-        """Move book files from library_db_path into book_file_path after import.
+        """Move all book files from library_db_path into book_file_path after import.
 
         calibredb always writes files into _library (the metadata.db location).
         When book_file_path is configured separately (calibre-web split-library
-        mode), files must be moved so calibre-web can resolve them via the
-        relative path from book_file_path.
+        mode), all files in the book's directory must be moved so calibre-web
+        can find them — this includes format files (.epub, .m4b), cover.jpg,
+        and metadata.opf.
 
-        The relative path (Author/Title (id)/file.ext) is preserved, so
-        calibre-web's path resolution continues to work correctly.
+        The relative path (Author/Title (id)/) is preserved so calibre-web's
+        path resolution continues to work correctly.
         """
-        for src in self._get_format_paths(book_id):
-            if not src.exists():
-                log.warning("calibre.local.relocate_src_missing: %s", src)
+        format_paths = self._get_format_paths(book_id)
+        if not format_paths:
+            log.warning("calibre.local.relocate_no_formats: book_id=%s", book_id)
+            return
+
+        # All format files for a book live in the same directory.
+        # Use the first valid one to locate the book's directory under _library.
+        src_dir: Path | None = None
+        for fmt_path in format_paths:
+            if fmt_path.exists():
+                try:
+                    fmt_path.relative_to(self._library)
+                    src_dir = fmt_path.parent
+                    break
+                except ValueError:
+                    continue
+
+        if src_dir is None:
+            log.warning("calibre.local.relocate_src_dir_missing: book_id=%s", book_id)
+            return
+
+        try:
+            rel_dir = src_dir.relative_to(self._library)
+        except ValueError:
+            log.warning(
+                "calibre.local.relocate_not_under_library: %s (library=%s)",
+                src_dir, self._library,
+            )
+            return
+
+        dest_dir = self._book_files / rel_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Move every file in the book directory: formats + cover.jpg + metadata.opf
+        for src in src_dir.iterdir():
+            if not src.is_file():
                 continue
-            try:
-                rel = src.relative_to(self._library)
-            except ValueError:
-                log.warning(
-                    "calibre.local.relocate_not_under_library: %s (library=%s)",
-                    src, self._library,
-                )
-                continue
-            dest = self._book_files / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / src.name
             shutil.move(str(src), str(dest))
             log.info(
                 "calibre.local.relocated",
                 extra={"src": str(src), "dest": str(dest), "book_id": book_id},
             )
-            # Clean up the now-empty Author/Title(id)/ directory under library_db_path.
+
+        # Remove the now-empty book directory under library_db_path
+        try:
+            src_dir.rmdir()
+        except OSError:
+            pass  # Non-empty or already gone — safe to ignore
+
+    def _relocate_cover(self, book_id: int) -> None:
+        """Move cover.jpg from library_db_path to book_file_path.
+
+        Called after set_cover() because calibredb always writes cover.jpg into
+        _library regardless of whether split-path mode is active.  Without this,
+        calibre-web cannot find the cover when book_file_path != library_db_path.
+
+        _get_format_paths() returns paths as calibredb knows them (under _library),
+        so the parent directory gives us the exact location of the newly-written
+        cover.jpg.
+        """
+        for fmt_path in self._get_format_paths(book_id):
             try:
-                src.parent.rmdir()
-            except OSError:
-                pass  # Non-empty or already gone — safe to ignore
+                rel_dir = fmt_path.relative_to(self._library).parent
+            except ValueError:
+                continue
+            src_cover = self._library / rel_dir / "cover.jpg"
+            if src_cover.exists():
+                dest_cover = self._book_files / rel_dir / "cover.jpg"
+                dest_cover.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src_cover), str(dest_cover))
+                log.info(
+                    "calibre.local.cover_relocated",
+                    extra={"book_id": book_id, "dest": str(dest_cover)},
+                )
+                return
+        log.debug("calibre.local.cover_relocate_not_found: book_id=%s", book_id)
 
     def set_metadata(self, book_id: int, result: MetadataResult) -> None:
         if book_id < 0:
@@ -186,6 +240,10 @@ class LocalCalibre(CalibreBackend):
             log.warning("calibre.local.set_cover_failed: %s", result.stderr.strip())
         else:
             log.info("calibre.local.cover_set", extra={"book_id": book_id})
+            # In split-path mode calibredb writes cover.jpg back into _library.
+            # Move it to _book_files so calibre-web can find it.
+            if self._book_files != self._library:
+                self._relocate_cover(book_id)
 
     def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)
