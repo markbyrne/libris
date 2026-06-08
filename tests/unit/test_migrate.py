@@ -304,3 +304,89 @@ class TestMigrateLibrary:
         ])
         assert result.exit_code != 0
         assert "--books-only" in result.output or "cannot be used together" in result.output
+
+    def test_books_only_skip_conflicts(self, libris_tree):
+        """When dest already has a file, 'skip' leaves dest unchanged, skips that file."""
+        runner = CliRunner()
+        calibre = libris_tree["calibre"]
+        book_files = self._seed_calibre(calibre)
+        dest = libris_tree["tmp"] / "ext-drive" / "books"
+
+        # Pre-plant one of the book files at the destination with different content
+        pre_existing = dest / book_files[0].relative_to(calibre)
+        pre_existing.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing.write_text("original content — should survive")
+
+        result = _invoke(runner, libris_tree["config"], [
+            "migrate-library", str(calibre), str(dest), "--books-only",
+        ], input="skip\ny\n")   # conflict prompt: skip; proceed: yes
+        assert result.exit_code == 0, result.output
+        assert "skipped" in result.output
+
+        # Destination file must keep its original content
+        assert pre_existing.read_text() == "original content — should survive"
+        # The conflicting source file must still be at the source (was not moved)
+        assert book_files[0].exists()
+        # Non-conflicting file must have been moved
+        assert (dest / book_files[1].relative_to(calibre)).exists()
+
+    def test_books_only_overwrite_conflicts(self, libris_tree):
+        """When dest already has a file, 'overwrite' replaces it with the source."""
+        runner = CliRunner()
+        calibre = libris_tree["calibre"]
+        book_files = self._seed_calibre(calibre)
+        dest = libris_tree["tmp"] / "ext-drive" / "books"
+
+        pre_existing = dest / book_files[0].relative_to(calibre)
+        pre_existing.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing.write_text("old content")
+
+        result = _invoke(runner, libris_tree["config"], [
+            "migrate-library", str(calibre), str(dest), "--books-only",
+        ], input="overwrite\ny\n")
+        assert result.exit_code == 0, result.output
+
+        # Destination file replaced by source
+        assert pre_existing.read_text() == "fake epub"
+
+    def test_books_only_abort_on_conflict(self, libris_tree):
+        """Choosing 'abort' when conflicts are found leaves both source and dest unchanged."""
+        runner = CliRunner()
+        calibre = libris_tree["calibre"]
+        book_files = self._seed_calibre(calibre)
+        dest = libris_tree["tmp"] / "ext-drive" / "books"
+
+        pre_existing = dest / book_files[0].relative_to(calibre)
+        pre_existing.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing.write_text("original")
+
+        result = _invoke(runner, libris_tree["config"], [
+            "migrate-library", str(calibre), str(dest), "--books-only",
+        ], input="abort\n")
+        assert result.exit_code == 0, result.output
+        assert "Aborted" in result.output
+
+        # Source files intact
+        for bf in book_files:
+            assert bf.exists()
+        # Pre-existing dest file unchanged
+        assert pre_existing.read_text() == "original"
+
+    def test_full_move_conflict_warns_and_aborts(self, libris_tree):
+        """Full move with a conflict at dest warns and aborts when user says no."""
+        runner = CliRunner()
+        calibre = libris_tree["calibre"]
+        book_files = self._seed_calibre(calibre)
+        dest = libris_tree["tmp"] / "new-calibre"
+
+        # Pre-plant a conflicting file
+        conflict = dest / book_files[0].relative_to(calibre)
+        conflict.parent.mkdir(parents=True, exist_ok=True)
+        conflict.write_text("keep me")
+
+        result = _invoke(runner, libris_tree["config"], [
+            "migrate-library", str(calibre), str(dest), "--books-only",
+        ], input="abort\n")
+        assert result.exit_code == 0
+        assert conflict.read_text() == "keep me"
+        assert calibre.exists()  # source not deleted

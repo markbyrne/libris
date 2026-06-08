@@ -2779,6 +2779,61 @@ def migrate_library(
         click.echo()
         return
 
+    # ── Conflict detection (done before confirming, so user knows what they're committing to) ─
+
+    conflict_choice = "overwrite"   # default when no conflicts
+
+    if books_only:
+        # Collect candidates now so we can scan for conflicts before asking to proceed
+        candidates: list[tuple[Path, Path]] = []
+        for src in sorted(from_path.rglob("*")):
+            if not src.is_file():
+                continue
+            if src.name == "metadata.db" or src.name.startswith("metadata_db_backup"):
+                continue
+            rel = src.relative_to(from_path)
+            candidates.append((src, to_path / rel))
+
+        conflicts = [(src, dest) for src, dest in candidates if dest.exists()]
+        if conflicts:
+            click.echo(click.style(
+                f"  ⚠   {len(conflicts)} file(s) already exist at the destination:",
+                fg="yellow",
+            ))
+            for src, dest in conflicts[:5]:
+                click.echo(f"        {dest.relative_to(to_path)}")
+            if len(conflicts) > 5:
+                click.echo(f"        … and {len(conflicts) - 5} more")
+            click.echo()
+            conflict_choice = click.prompt(
+                "  Conflict resolution",
+                type=click.Choice(["overwrite", "skip", "abort"], case_sensitive=False),
+                default="skip",
+            )
+            if conflict_choice == "abort":
+                click.echo("  Aborted — no files moved.")
+                return
+
+    elif not db_only:
+        # Full library move — scan for conflicts upfront
+        full_conflicts = [
+            p for p in from_path.rglob("*")
+            if p.is_file() and (to_path / p.relative_to(from_path)).exists()
+        ]
+        if full_conflicts:
+            click.echo(click.style(
+                f"  ⚠   {len(full_conflicts)} file(s) already exist at the destination:",
+                fg="yellow",
+            ))
+            for p in full_conflicts[:5]:
+                click.echo(f"        {p.relative_to(from_path)}")
+            if len(full_conflicts) > 5:
+                click.echo(f"        … and {len(full_conflicts) - 5} more")
+            click.echo()
+            if not click.confirm("  Overwrite conflicting files and continue?", default=False):
+                click.echo("  Aborted.")
+                return
+
     if not click.confirm("  Proceed with migration?", default=True):
         raise SystemExit(0)
 
@@ -2786,40 +2841,56 @@ def migrate_library(
     to_path.mkdir(parents=True, exist_ok=True)
 
     if books_only:
-        # Move all files EXCEPT metadata.db and *.db backup files
-        n_moved = 0
-        for src in sorted(from_path.rglob("*")):
-            if not src.is_file():
+        n_moved = n_skipped = 0
+        for src, dest in candidates:
+            if dest.exists() and conflict_choice == "skip":
+                n_skipped += 1
                 continue
-            if src.name == "metadata.db" or src.name.startswith("metadata_db_backup"):
-                continue
-            rel = src.relative_to(from_path)
-            dest = to_path / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dest))
             n_moved += 1
-        # Clean up now-empty directories (but not from_path itself)
+
+        # Clean up now-empty directories under from_path (but not from_path itself)
         for dirpath in sorted(from_path.rglob("*"), reverse=True):
             if dirpath.is_dir() and dirpath != from_path:
                 try:
                     dirpath.rmdir()
                 except OSError:
                     pass
-        click.echo(f"  ✓ {n_moved} file(s) moved to {to_path}")
+
+        summary = f"  ✓ {n_moved} file(s) moved to {to_path}"
+        if n_skipped:
+            summary += f" ({n_skipped} skipped — already present at destination)"
+        click.echo(summary)
 
         # Update config for split-library mode
         _update_config_calibre_split(cfg_path, str(from_path), str(to_path))
         click.echo(f"  ✅  Config updated to split-library mode: {cfg_path}")
 
     elif db_only:
-        # Move only the DB files
+        # DB-only: check for conflicts then proceed
+        db_candidates = [
+            src for src in from_path.iterdir()
+            if src.is_file() and (src.suffix == ".db" or src.name.startswith("metadata"))
+        ]
+        db_conflicts = [src for src in db_candidates if (to_path / src.name).exists()]
+        if db_conflicts:
+            click.echo(click.style(
+                f"  ⚠   {len(db_conflicts)} DB file(s) already exist at the destination:",
+                fg="yellow",
+            ))
+            for src in db_conflicts:
+                click.echo(f"        {src.name}")
+            if not click.confirm("  Overwrite?", default=False):
+                click.echo("  Aborted.")
+                return
+
         n_moved = 0
-        for src in from_path.iterdir():
-            if src.is_file() and (src.suffix == ".db" or src.name.startswith("metadata")):
-                dest = to_path / src.name
-                shutil.move(str(src), str(dest))
-                click.echo(f"  ✓ {src.name}")
-                n_moved += 1
+        for src in db_candidates:
+            dest = to_path / src.name
+            shutil.move(str(src), str(dest))
+            click.echo(f"  ✓ {src.name}")
+            n_moved += 1
         click.echo(f"  ✓ {n_moved} file(s) moved to {to_path}")
 
         # Update config: library_db_path → to_path
@@ -2830,7 +2901,7 @@ def migrate_library(
         click.echo(f"  ✅  Config updated: {cfg_path}")
 
     else:
-        # Full library move
+        # Full library move (conflict check already done above)
         shutil.copytree(str(from_path), str(to_path), dirs_exist_ok=True)
         shutil.rmtree(str(from_path))
         click.echo(f"  ✓ Library moved to {to_path}")
