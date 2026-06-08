@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from rapidfuzz import fuzz as _fuzz
+
 from .audio import converter as audio_conv
 from .audio import tagger as audio_tag
 from .calibre import get_calibre
@@ -1031,6 +1033,30 @@ class Pipeline:
             return self._calibre.search(query)
         except Exception as exc:
             log.warning("pipeline.duplicate_check_failed: %s", exc)
+            return []
+
+    def _find_fuzzy_duplicates(self, title: str, author: str) -> list[dict]:
+        """Return Calibre books that are near-matches (85–99% similarity) but not exact.
+
+        Uses rapidfuzz token_sort_ratio on the combined title+author string.
+        Scores of 100 are exact matches already handled by _find_calibre_duplicates;
+        scores below 85 are too dissimilar to show. Returns [] on any error —
+        fuzzy check is best-effort and should never crash the pipeline.
+        """
+        if not title:
+            return []
+        try:
+            query = f"{title} {author or ''}".lower().strip()
+            results = []
+            for book in self._calibre.list_books():
+                authors_str = " ".join(book.get("authors") or [])
+                lib_q = f"{book.get('title', '')} {authors_str}".lower().strip()
+                score = _fuzz.token_sort_ratio(query, lib_q)
+                if 85 <= score < 100:
+                    results.append({**book, "similarity": score})
+            return sorted(results, key=lambda b: b["similarity"], reverse=True)
+        except Exception as exc:
+            log.warning("pipeline.fuzzy_check_failed: %s", exc)
             return []
 
     def _handle_duplicate(
