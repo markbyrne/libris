@@ -491,12 +491,21 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  State DB:       {config.paths.state_db}")
     click.echo(f"  Calibre mode:   {config.calibre.mode}")
     if config.calibre.mode == "local":
-        _lib = config.calibre.library_path
+        _lib = config.calibre.library_db_path
         click.echo(f"  Library path:   {_lib}")
         if not _lib.exists():
             click.echo(click.style(
-                f"  ⚠   Library path does not exist — it will be created on first import.", fg="yellow"
+                "  ⚠   Library path does not exist — it will be created on first import.",
+                fg="yellow",
             ))
+        if config.calibre.book_file_path:
+            _bfp = config.calibre.book_file_path
+            click.echo(f"  Book files:     {_bfp}")
+            if not _bfp.exists():
+                click.echo(click.style(
+                    "  ⚠   Book files path does not exist — it will be created on first import.",
+                    fg="yellow",
+                ))
     else:
         click.echo(f"  Container:      {config.calibre.docker_container}")
     click.echo(f"  Confidence:     {config.metadata.confidence_threshold}")
