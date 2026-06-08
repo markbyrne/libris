@@ -159,11 +159,30 @@ def _hyperlink(url: str, text: str) -> str:
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
+def _render_review_hints(has_audio: bool = False, has_dupes: bool = False) -> None:
+    """Print the standard action-hints footer for the review queue."""
+    click.echo(_hr())
+    click.echo("  Accept by ID:    libris review-accept --id <N>")
+    click.echo("  Accept all:      libris review-accept --accept-all")
+    click.echo("  Accept by path:  libris review-accept \"<path>\"")
+    if has_dupes:
+        click.echo(click.style(
+            "  Overwrite [!]:   libris review-accept --id <N> --overwrite",
+            fg="yellow",
+        ))
+    click.echo("  Fix bad match:   libris rematch --id <N>")
+    click.echo("  Preview cover:   libris show-cover --id <N>")
+    click.echo("  Discard:         libris review-discard --id <N>")
+    click.echo("  Discard dupes:   libris review-discard --duplicates")
+    if has_audio:
+        click.echo("  Mark as part:    libris mark-as-part --id <N> --part <num> --total <total>")
+
+
 def _show_queue_summary(config) -> None:
     """Re-render the review queue after an accept/rematch so the user sees fresh IDs.
 
-    Shows a compact list (filename + score) rather than the full _render_review_record
-    detail — the user can run 'libris list-review' for full detail if needed.
+    Shows items with full detail and the action-hints footer so the user knows
+    what commands are available without re-running 'libris list-review'.
     Prints a green 'Queue is now empty' message when nothing remains.
     """
     store = _open_store(config.paths.state_db)
@@ -179,6 +198,9 @@ def _show_queue_summary(config) -> None:
         for i, r in enumerate(records, 1):
             _render_review_record(i, r)
             click.echo()
+        has_audio = any(r.media_type == "audiobook" for r in records)
+        has_dupes = any(r.error_msg and r.error_msg.startswith("Duplicate:") for r in records)
+        _render_review_hints(has_audio=has_audio, has_dupes=has_dupes)
     if stale:
         click.echo(click.style(
             f"  ⚠   {stale} stale record(s) not shown — run 'libris review-discard --stale'",
@@ -543,22 +565,8 @@ def list_review(config_path: Optional[Path]) -> None:
     has_dupes = any(
         r.error_msg and r.error_msg.startswith("Duplicate:") for r in records
     )
-    click.echo(_hr())
-    click.echo("  Accept by ID:    libris review-accept --id <N>")
-    click.echo("  Accept all:      libris review-accept --accept-all")
-    click.echo("  Accept by path:  libris review-accept \"<path>\"")
-    if has_dupes:
-        click.echo(click.style(
-            "  Overwrite [!]:   libris review-accept --id <N> --overwrite",
-            fg="yellow",
-        ))
-    click.echo("  Fix bad match:   libris rematch --id <N>")
-    click.echo("  Preview cover:   libris show-cover --id <N>")
-    click.echo("  Discard:         libris review-discard --id <N>")
-    click.echo("  Discard dupes:   libris review-discard --duplicates")
     has_audio = any(r.media_type == "audiobook" for r in records)
-    if has_audio:
-        click.echo("  Mark as part:    libris mark-as-part --id <N> --part <num> --total <total>")
+    _render_review_hints(has_audio=has_audio, has_dupes=has_dupes)
     if stale_count:
         click.echo()
         click.echo(click.style(
