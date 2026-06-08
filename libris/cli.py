@@ -918,6 +918,82 @@ def review_accept(
             any_failed = True
             continue
 
+        # ── Fuzzy near-match check ─────────────────────────────────────────
+        # Before importing, check for near-matches in the Calibre library that
+        # exact-title search would miss (e.g. "Project Hail Mary: A Novel" vs
+        # "Project Hail Mary"). Skipped when --overwrite is given or in batch
+        # mode (--accept-all), since we can't prompt interactively there.
+        if (
+            not overwrite
+            and not accept_all
+            and cached_record
+            and cached_record.matched_title
+        ):
+            _tmp_pipeline = Pipeline(config)
+            near_matches = _tmp_pipeline._find_fuzzy_duplicates(
+                cached_record.matched_title,
+                cached_record.matched_author or "",
+            )
+            if near_matches:
+                top = near_matches[0]
+                top_authors = ", ".join(top.get("authors") or [])
+                top_formats = ", ".join(top.get("formats") or []).upper() or "unknown"
+                click.echo(click.style(
+                    f"  ⚠  Near-match found in Calibre library "
+                    f"({top['similarity']:.0f}% similar):",
+                    fg="yellow",
+                ))
+                click.echo(f"     \"{top['title']}\" by {top_authors}  "
+                           f"[ID {top['id']}]  formats: {top_formats}")
+                click.echo()
+                click.echo("     [m]  Merge    — add this format to the existing book")
+                click.echo("     [o]  Overwrite — replace the existing format")
+                click.echo("     [d]  Discard  — delete this file, keep existing book")
+                click.echo("     [n]  New entry — import as a separate book")
+                click.echo()
+                while True:
+                    fuzzy_choice = click.prompt("     Choice", default="n").strip().lower()
+                    if fuzzy_choice in ("m", "o", "d", "n"):
+                        break
+                    click.echo(click.style("     Please enter m, o, d, or n.", fg="yellow"))
+
+                if fuzzy_choice in ("m", "o"):
+                    # Add/overwrite format on the existing Calibre book
+                    try:
+                        _tmp_pipeline._calibre.add_format(top["id"], target)
+                        store2 = _open_store(config.paths.state_db)
+                        if cached_record:
+                            cached_record.state = FileState.IMPORTED
+                            cached_record.error_msg = (
+                                f"Merged into Calibre book {top['id']} "
+                                f"({top['similarity']:.0f}% near-match)"
+                            )
+                            store2.upsert(cached_record)
+                        store2.close()
+                        click.echo(
+                            f"  ✅  {target.name}  [merged into Calibre ID {top['id']}]"
+                        )
+                    except Exception as exc:
+                        click.echo(click.style(f"  ❌  Merge failed: {exc}", fg="red"), err=True)
+                        any_failed = True
+                    click.echo()
+                    continue
+
+                elif fuzzy_choice == "d":
+                    target.unlink(missing_ok=True)
+                    store2 = _open_store(config.paths.state_db)
+                    if cached_record:
+                        cached_record.state = FileState.IMPORTED
+                        cached_record.error_msg = (
+                            f"Discarded by user — near-duplicate of Calibre ID {top['id']}"
+                        )
+                        store2.upsert(cached_record)
+                    store2.close()
+                    click.echo(f"  🗑   {target.name}  [discarded — near-duplicate]")
+                    click.echo()
+                    continue
+                # fuzzy_choice == "n": fall through to normal import
+
         pipeline = Pipeline(config)
         # Ensure the pipeline won't re-flag this as a duplicate mid-import
         if overwrite:
