@@ -1,12 +1,23 @@
-"""Tests for migrate-libris and migrate-library CLI commands (Issue #19)."""
+"""Tests for migrate-libris, migrate-library, and check-config CLI commands."""
 
 import textwrap
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from click.testing import CliRunner
 
 from libris.cli import main
+
+
+# ---------------------------------------------------------------------------
+# Shared test stubs
+# ---------------------------------------------------------------------------
+
+class _FakeCalibre:
+    """Minimal stub to prevent real calibredb calls in check-config tests."""
+    def list_books(self):
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -434,15 +445,22 @@ class TestCheckConfigDisplay:
         assert "Book files:" in result.output
         assert "does not exist" in result.output or "⚠" in result.output
 
-    def test_google_books_enabled_shown(self, libris_tree):
-        """check-config shows 'enabled (key configured)' when API key is set; key not printed."""
+    def test_google_books_enabled_shown(self, libris_tree, monkeypatch):
+        """check-config shows 'enabled (key configured)' when API key is set; key not printed.
+
+        httpx.get is mocked to prevent the key from appearing in error URLs
+        (the API connectivity check would otherwise embed it in the request URL).
+        """
         text = libris_tree["config"].read_text()
-        # Inject google_books_api_key under the metadata section
         text = text.replace(
             "  confidence_threshold: 0.75",
             "  confidence_threshold: 0.75\n  google_books_api_key: secret-api-key-xyz",
         )
         libris_tree["config"].write_text(text)
+        # Mock the HTTP call so the key is never sent or reflected in output
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = lambda: None
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: fake_resp)
         runner = CliRunner()
         result = _invoke(runner, libris_tree["config"], ["check-config"])
         assert "Google Books:" in result.output
@@ -455,3 +473,75 @@ class TestCheckConfigDisplay:
         result = _invoke(runner, libris_tree["config"], ["check-config"])
         assert "Google Books:" in result.output
         assert "disabled (no key)" in result.output
+
+
+# ---------------------------------------------------------------------------
+# check-config path + API reachability (Issue #28)
+# ---------------------------------------------------------------------------
+
+class TestCheckConfigPathChecks:
+    """Tests for the 'Checking paths…' and Google Books API sections."""
+
+    def test_existing_paths_show_checkmarks(self, libris_tree, monkeypatch):
+        """When all configured dirs exist, path checks show ✅."""
+        monkeypatch.setattr("libris.cli.get_calibre", lambda cfg: _FakeCalibre())
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Checking paths" in result.output
+        # Fixture creates incoming, staging, review, failed, calibre — all real dirs
+        assert result.output.count("✅") >= 4
+
+    def test_missing_path_shows_warning(self, libris_tree, monkeypatch):
+        """A missing configured directory shows ⚠ and 'not found'."""
+        monkeypatch.setattr("libris.cli.get_calibre", lambda cfg: _FakeCalibre())
+        text = libris_tree["config"].read_text()
+        text = text.replace(
+            str(libris_tree["staging"]), "/nonexistent/staging-dir"
+        )
+        libris_tree["config"].write_text(text)
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "⚠" in result.output
+        assert "not found" in result.output
+
+    def test_google_books_not_configured(self, libris_tree, monkeypatch):
+        """When no API key is set, shows 'not configured'."""
+        monkeypatch.setattr("libris.cli.get_calibre", lambda cfg: _FakeCalibre())
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Google Books API" in result.output
+        assert "not configured" in result.output
+
+    def test_google_books_reachable(self, libris_tree, monkeypatch):
+        """When API key is set and HTTP succeeds, shows ✅ reachable."""
+        monkeypatch.setattr("libris.cli.get_calibre", lambda cfg: _FakeCalibre())
+        text = libris_tree["config"].read_text()
+        text = text.replace(
+            "  confidence_threshold: 0.75",
+            "  confidence_threshold: 0.75\n  google_books_api_key: fake-key",
+        )
+        libris_tree["config"].write_text(text)
+
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = lambda: None
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: fake_resp)
+
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "reachable" in result.output
+
+    def test_google_books_failed(self, libris_tree, monkeypatch):
+        """When API key is set and HTTP raises, shows ❌ failed."""
+        monkeypatch.setattr("libris.cli.get_calibre", lambda cfg: _FakeCalibre())
+        text = libris_tree["config"].read_text()
+        text = text.replace(
+            "  confidence_threshold: 0.75",
+            "  confidence_threshold: 0.75\n  google_books_api_key: bad-key",
+        )
+        libris_tree["config"].write_text(text)
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: (_ for _ in ()).throw(
+            Exception("connection refused")
+        ))
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "❌" in result.output
