@@ -390,3 +390,46 @@ class TestMigrateLibrary:
         assert result.exit_code == 0
         assert conflict.read_text() == "keep me"
         assert calibre.exists()  # source not deleted
+
+
+# ---------------------------------------------------------------------------
+# check-config display section (Issues #26, #27)
+# ---------------------------------------------------------------------------
+
+class TestCheckConfigDisplay:
+    """Tests for the settings display block of check-config."""
+
+    def test_book_files_shown_when_set(self, libris_tree, tmp_path):
+        """check-config shows 'Book files:' when book_file_path is configured."""
+        books = tmp_path / "ext-books"
+        books.mkdir()
+        # Patch the config to include book_file_path under the calibre section
+        text = libris_tree["config"].read_text()
+        text = text.replace(
+            f"  library_path: {libris_tree['calibre']}",
+            f"  library_db_path: {libris_tree['calibre']}\n  book_file_path: {books}",
+        )
+        libris_tree["config"].write_text(text)
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Book files:" in result.output
+        assert str(books) in result.output
+
+    def test_book_files_not_shown_when_unset(self, libris_tree):
+        """check-config does not show 'Book files:' when book_file_path is absent."""
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Book files:" not in result.output
+
+    def test_book_files_warns_when_missing(self, libris_tree):
+        """check-config warns when book_file_path is configured but doesn't exist."""
+        text = libris_tree["config"].read_text()
+        text = text.replace(
+            f"  library_path: {libris_tree['calibre']}",
+            f"  library_db_path: {libris_tree['calibre']}\n  book_file_path: /nonexistent/books",
+        )
+        libris_tree["config"].write_text(text)
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Book files:" in result.output
+        assert "does not exist" in result.output or "⚠" in result.output
