@@ -487,6 +487,21 @@ The same prompt appears during `rematch` if the candidate you pick is already in
 
 With `duplicate_action: import` in your config, the same smart merge happens automatically — same format is replaced in-place, different format is added to the existing record. No second Calibre entry is ever created.
 
+#### Near-match detection
+
+When you run `review-accept`, Libris also checks for **near-matches** — books already in Calibre that are similar but not an exact title match (e.g. "Project Hail Mary: A Novel" vs "Project Hail Mary"). If a near-match is found, you're prompted with four options:
+
+```
+  ⚠  Near-match found in Calibre library (94% similar):
+     "Project Hail Mary: A Novel" by Andy Weir  [ID 42]  formats: EPUB
+
+  [m]  Merge    — add this format to the existing book
+  [o]  Overwrite — replace the existing format
+  [d]  Discard  — delete this file, keep existing book
+  [n]  New entry — import as a separate book
+  Choice [m/o/d/n]:
+```
+
 To batch-delete duplicates or chaff:
 
 ```bash
