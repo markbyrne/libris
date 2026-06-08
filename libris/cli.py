@@ -518,6 +518,12 @@ def check_config(config_path: Optional[Path]) -> None:
     click.echo(f"  ntfy topic:     {config.ntfy.topic or '(not set)'}")
     click.echo(f"  ntfy enabled:   {config.ntfy.enabled}")
     click.echo(f"  Log level:      {config.log_level}")
+    _gbooks_status = (
+        "enabled (key configured)"
+        if config.metadata.google_books_api_key
+        else "disabled (no key)"
+    )
+    click.echo(f"  Google Books:   {_gbooks_status}")
 
     # ── calibredb reachability check ─────────────────────────────────────
     click.echo()
