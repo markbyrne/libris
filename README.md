@@ -402,7 +402,14 @@ Items showing `[!] No match found` could not be matched by either API. Run `libr
 
 Files that have been moved out of `review/` manually are automatically excluded — only files that still exist on disk are shown.
 
-If there are also files in the failed state, a warning is shown — run `libris recover` to handle them.
+If there are files in PENDING or FAILED state, a warning is shown at the bottom of the review queue:
+
+```
+  ⚠   2 file(s) in PENDING state — run 'libris list-pending' to see them.
+  ⚠   1 file(s) in FAILED state — run 'libris list-failed' to see them.
+```
+
+These counts are also shown when the review queue refreshes automatically after a `review-accept` or `rematch`.
 
 ---
 

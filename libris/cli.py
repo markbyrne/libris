@@ -168,6 +168,8 @@ def _show_queue_summary(config) -> None:
     """
     store = _open_store(config.paths.state_db)
     records, stale = _live_review_records(store)
+    pending_count = len(store.list_by_state(FileState.PENDING_PARTS))
+    failed_count = len(store.list_by_state(FileState.FAILED))
     store.close()
     click.echo()
     if not records:
@@ -182,6 +184,16 @@ def _show_queue_summary(config) -> None:
     if stale:
         click.echo(click.style(
             f"  ⚠   {stale} stale record(s) not shown — run 'libris review-discard --stale'",
+            fg="yellow",
+        ))
+    if pending_count:
+        click.echo(click.style(
+            f"  ⚠   {pending_count} file(s) in PENDING state — run 'libris list-pending' to see them.",
+            fg="yellow",
+        ))
+    if failed_count:
+        click.echo(click.style(
+            f"  ⚠   {failed_count} file(s) in FAILED state — run 'libris list-failed' to see them.",
             fg="yellow",
         ))
     click.echo()
@@ -511,7 +523,8 @@ def list_review(config_path: Optional[Path]) -> None:
     config = load_config(path)
     store = _open_store(config.paths.state_db)
     records, stale_count = _live_review_records(store)
-    failed_records = store.list_by_state(FileState.FAILED)
+    failed_count = len(store.list_by_state(FileState.FAILED))
+    pending_count = len(store.list_by_state(FileState.PENDING_PARTS))
     store.close()
 
     click.echo()
@@ -523,10 +536,16 @@ def list_review(config_path: Optional[Path]) -> None:
                 f"      Clean up: libris review-discard --stale",
                 fg="yellow",
             ))
-        if failed_records:
+        if pending_count:
             click.echo()
             click.echo(click.style(
-                f"  ⚠   {len(failed_records)} file(s) in FAILED state — run 'libris recover' to see them.",
+                f"  ⚠   {pending_count} file(s) in PENDING state — run 'libris list-pending' to see them.",
+                fg="yellow",
+            ))
+        if failed_count:
+            click.echo()
+            click.echo(click.style(
+                f"  ⚠   {failed_count} file(s) in FAILED state — run 'libris list-failed' to see them.",
                 fg="yellow",
             ))
         click.echo()
@@ -566,10 +585,16 @@ def list_review(config_path: Optional[Path]) -> None:
             f"      Clean up: libris review-discard --stale",
             fg="yellow",
         ))
-    if failed_records:
+    if pending_count:
         click.echo()
         click.echo(click.style(
-            f"  ⚠   {len(failed_records)} file(s) also in FAILED state — run 'libris recover'",
+            f"  ⚠   {pending_count} file(s) in PENDING state — run 'libris list-pending' to see them.",
+            fg="yellow",
+        ))
+    if failed_count:
+        click.echo()
+        click.echo(click.style(
+            f"  ⚠   {failed_count} file(s) in FAILED state — run 'libris list-failed' to see them.",
             fg="yellow",
         ))
     click.echo()
