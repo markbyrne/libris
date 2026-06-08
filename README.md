@@ -16,6 +16,26 @@ Works with local Calibre installations and with [calibre-web](https://github.com
 
 ---
 
+## Recommended Stack
+
+Libris is designed as one component in a self-hosted media pipeline:
+
+```
+Download Manager       Libris                   Calibre DB         Reader App
+(Readarr /         →  watches /incoming     →  metadata.db    →  calibre-web
+ LazyLibrarian)       scores + converts         book files         serves to
+                       imports via calibredb                        devices
+```
+
+| Component | Role |
+|-----------|------|
+| **Readarr** or **LazyLibrarian** | Monitors RSS feeds, downloads ebooks/audiobooks, drops files into Libris's `incoming/` directory |
+| **Libris** | Watches `incoming/`, scores metadata confidence, converts formats (EPUB, M4B), imports into Calibre; holds ambiguous matches for manual review |
+| **Calibre** (`calibredb`) | Stores book metadata and files; the authoritative library database |
+| **calibre-web** | Serves the library to devices via a web UI; supports OPDS for e-reader apps |
+
+---
+
 ## Features
 
 - **Automatic import** — drop a file, it appears in Calibre with correct metadata; startup scan catches files that arrived while the daemon was offline
