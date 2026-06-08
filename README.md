@@ -813,6 +813,72 @@ Example output:
 
 ---
 
+### `migrate-libris` — move Libris dirs and DB to a new root
+
+Moves all of Libris's operational directories (`incoming/`, `staging/`, `review/`, `failed/`) and the state database to a new location, then updates the config file in-place. Existing files at the destination are preserved (merge-safe).
+
+```bash
+# Preview what would move (no changes)
+libris migrate-libris ~/new-libris --dry-run
+
+# Execute the migration
+libris migrate-libris ~/new-libris
+
+# Verify the config updated correctly
+libris check-config
+```
+
+The command:
+1. Detects the common root of all Libris directories (e.g. `~/libris/`) and preserves the relative structure under the new root
+2. Prompts for confirmation before making any changes
+3. Copies each directory with merge semantics (`dirs_exist_ok=True`), then removes the originals
+4. Moves the state DB file
+5. Rewrites the affected config keys in-place (preserving inline YAML comments)
+
+---
+
+### `migrate-library` — move the Calibre library
+
+Moves Calibre library files to a new location and updates the config. Supports three modes:
+
+| Mode | What moves | Config change |
+|------|-----------|---------------|
+| (default) | Everything (`metadata.db` + book files) | `library_db_path → to_path` |
+| `--books-only` | Book files only; `metadata.db` stays | enables split-library mode |
+| `--db-only` | `metadata.db` only; book files stay | `library_db_path → to_path` |
+
+**Primary use case — move book files to an external drive:**
+
+```bash
+# Preview
+libris migrate-library /calibre-db /Volumes/ExtDrive/books --books-only --dry-run
+
+# Execute
+libris migrate-library /calibre-db /Volumes/ExtDrive/books --books-only
+
+# Verify — config now shows split-library mode
+libris check-config
+```
+
+After `--books-only`, the config transitions from a flat `library_path` to split mode:
+
+```yaml
+calibre:
+  mode: local
+  library_db_path: /calibre-db       # renamed from library_path; metadata.db is here
+  book_file_path: /Volumes/ExtDrive/books   # physical EPUB/M4B files
+```
+
+This matches calibre-web's **"Separate Book Files from Library"** setting and pairs directly with Libris's split-library support (Issue #18). After migration, new imports are automatically placed under `book_file_path`.
+
+**Full library move:**
+
+```bash
+libris migrate-library ~/calibre ~/new-location/calibre
+```
+
+---
+
 ### `reset` — unstick processing records
 
 If Libris crashes mid-import, files can be left in `PROCESSING` state and skipped on re-run. This command resets them to `INCOMING` so they'll be processed next time.
