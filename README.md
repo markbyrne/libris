@@ -108,7 +108,7 @@ paths:
 
 calibre:
   mode: local
-  library_path: ~/Calibre Library     # must match Calibre Preferences → Libraries
+  library_db_path: ~/Calibre Library  # must match Calibre Preferences → Libraries
 
 metadata:
   confidence_threshold: 0.75
@@ -194,7 +194,7 @@ paths:
 
 calibre:
   mode: local
-  library_path: ~/Calibre Library
+  library_db_path: ~/Calibre Library   # where metadata.db lives
 
 metadata:
   confidence_threshold: 0.75
@@ -207,6 +207,21 @@ ntfy:
   topic: my-libris-alerts
   enabled: true
 ```
+
+> **Note:** The legacy `library_path` key is still accepted and maps to `library_db_path`. Existing configs do not need to change.
+
+### calibre-web: Separate Book Files from Library
+
+If you use calibre-web's **"Separate Book Files from Library"** setting (where `metadata.db` is on a fast local disk but book files are on a NAS or external drive), configure both paths:
+
+```yaml
+calibre:
+  mode: local
+  library_db_path: /srv/calibre-db      # "Location of Calibre Database" in calibre-web
+  book_file_path:  /mnt/nas/books       # "Separate Book Files from Library" in calibre-web
+```
+
+After each import Libris will automatically move the physical file from `library_db_path/Author/Title (id)/` into the matching path under `book_file_path`, preserving the relative structure that calibre-web uses to serve files. If `book_file_path` is not set, behaviour is identical to the classic single-path setup.
 
 ### Docker config (e.g. calibre-web in a container)
 
