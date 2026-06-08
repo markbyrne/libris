@@ -306,6 +306,11 @@ class StateStore:
             sorted(groups.items(), key=lambda kv: min(r.created_at for r in kv[1]))
         )
 
+    def delete(self, record_id: str) -> bool:
+        """Delete a single record by its ID. Returns True if a row was deleted."""
+        cur = self._conn.execute("DELETE FROM files WHERE id=?", (record_id,))
+        return cur.rowcount > 0
+
     def delete_by_calibre_id(self, calibre_book_id: int) -> int:
         """Delete all records whose calibre_book_id matches *calibre_book_id*.
 
