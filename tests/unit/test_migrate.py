@@ -433,3 +433,25 @@ class TestCheckConfigDisplay:
         result = _invoke(runner, libris_tree["config"], ["check-config"])
         assert "Book files:" in result.output
         assert "does not exist" in result.output or "⚠" in result.output
+
+    def test_google_books_enabled_shown(self, libris_tree):
+        """check-config shows 'enabled (key configured)' when API key is set; key not printed."""
+        text = libris_tree["config"].read_text()
+        # Inject google_books_api_key under the metadata section
+        text = text.replace(
+            "  confidence_threshold: 0.75",
+            "  confidence_threshold: 0.75\n  google_books_api_key: secret-api-key-xyz",
+        )
+        libris_tree["config"].write_text(text)
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Google Books:" in result.output
+        assert "enabled (key configured)" in result.output
+        assert "secret-api-key-xyz" not in result.output  # key must never be printed
+
+    def test_google_books_disabled_shown(self, libris_tree):
+        """check-config shows 'disabled (no key)' when no API key is configured."""
+        runner = CliRunner()
+        result = _invoke(runner, libris_tree["config"], ["check-config"])
+        assert "Google Books:" in result.output
+        assert "disabled (no key)" in result.output
