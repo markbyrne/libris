@@ -433,7 +433,7 @@ Opens the matched cover image in your default browser. After opening, the full m
 
 Accepts the current metadata match and imports the file into Calibre, bypassing the confidence threshold. Uses cached metadata — no API call required.
 
-After a successful accept, the updated review queue is printed automatically so you can see the new IDs without re-running `list-review`.
+After a successful accept, the updated review queue is printed automatically — including the full action-hints footer — so you can see the new IDs and available commands without re-running `list-review`.
 
 ```bash
 # By review queue ID (from list-review)
