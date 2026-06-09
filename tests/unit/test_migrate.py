@@ -402,6 +402,55 @@ class TestMigrateLibrary:
         assert conflict.read_text() == "keep me"
         assert calibre.exists()  # source not deleted
 
+    def test_books_only_remove_conflict(self, libris_tree):
+        """'remove' deletes the source file and keeps the destination unchanged."""
+        runner = CliRunner()
+        calibre = libris_tree["calibre"]
+        book_files = self._seed_calibre(calibre)
+        dest = libris_tree["tmp"] / "ext-drive" / "books"
+
+        pre_existing = dest / book_files[0].relative_to(calibre)
+        pre_existing.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing.write_text("keep this — already migrated")
+
+        result = _invoke(runner, libris_tree["config"], [
+            "migrate-library", str(calibre), str(dest), "--books-only",
+        ], input="remove\ny\n")
+        assert result.exit_code == 0, result.output
+
+        # Destination must be unchanged
+        assert pre_existing.read_text() == "keep this — already migrated"
+        # Source of the conflict must be gone
+        assert not book_files[0].exists()
+        # Non-conflicting file must have moved
+        assert (dest / book_files[1].relative_to(calibre)).exists()
+        # Summary should mention removed count
+        assert "removed" in result.output
+
+    def test_books_only_remove_all_leaves_only_metadata_db(self, libris_tree):
+        """When all files conflict and 'remove' chosen, from_path keeps only metadata.db."""
+        runner = CliRunner()
+        calibre = libris_tree["calibre"]
+        book_files = self._seed_calibre(calibre)
+        dest = libris_tree["tmp"] / "ext-drive" / "books"
+
+        # Pre-plant ALL book files at destination
+        for bf in book_files:
+            rel = bf.relative_to(calibre)
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            (dest / rel).write_text("already there")
+
+        result = _invoke(runner, libris_tree["config"], [
+            "migrate-library", str(calibre), str(dest), "--books-only",
+        ], input="remove\ny\n")
+        assert result.exit_code == 0, result.output
+
+        # metadata.db must still be at the source
+        assert (calibre / "metadata.db").exists()
+        # All book source files must be deleted
+        for bf in book_files:
+            assert not bf.exists(), f"Expected {bf} to be removed"
+
 
 # ---------------------------------------------------------------------------
 # check-config display section (Issues #26, #27)
