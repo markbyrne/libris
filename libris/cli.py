@@ -15,6 +15,7 @@ Commands:
   libris remove          — Permanently delete failed file(s) and their DB records
   libris prune           — Remove DB records for files manually deleted from disk
   libris list-pending    — Show multi-part audiobooks waiting for sibling parts
+  libris pending-discard — Move a pending part group back to review/
   libris combine-parts   — Force-combine a pending part group and import
   libris revert-import   — Remove a book from Calibre and return it to review/
   libris search          — Search the Calibre library (uses library path from config)
@@ -1750,6 +1751,99 @@ def list_pending(config_path: Optional[Path]) -> None:
     click.echo(_hr())
     click.echo("  Force-combine:  libris combine-parts --id <N>")
     click.echo("  Combine all:    libris combine-parts --all")
+    click.echo("  Discard group:  libris pending-discard --id <N>")
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# pending-discard — send a pending group back to review
+# ---------------------------------------------------------------------------
+
+@main.command("pending-discard")
+@click.option("--id", "group_id", required=True, type=int,
+              help="Pending group position (from 'libris list-pending')")
+@_CONFIG_OPTION
+def pending_discard(group_id: int, config_path: Optional[Path]) -> None:
+    """Move a pending part group back to review/ for re-processing.
+
+    Strips part markers from filenames, clears part tracking metadata, and
+    moves each file back to review/ with state REVIEW.  Use this when a
+    group was assembled incorrectly or files were marked as parts by mistake.
+
+    \b
+      libris list-pending                 # find the group ID
+      libris pending-discard --id 1       # move group [1] back to review
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+
+    groups = store.list_pending_groups()
+    if not groups:
+        store.close()
+        click.echo("\n  No pending groups.\n")
+        return
+
+    group_list = list(groups.items())
+    if group_id < 1 or group_id > len(group_list):
+        store.close()
+        _die(
+            f"ID {group_id} out of range — {len(group_list)} pending group(s).\n"
+            "  Run 'libris list-pending' to see current IDs."
+        )
+
+    group_key, records = group_list[group_id - 1]
+    review_dir = config.paths.review_dir
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    click.echo()
+    click.echo(f"  Discarding pending group: {click.style(group_key, bold=True)}")
+    click.echo()
+
+    any_failed = False
+    for record in records:
+        current = Path(record.current_path)
+        if not current.exists():
+            click.echo(
+                click.style(f"  ⚠   File not found, skipping: {current}", fg="yellow"),
+                err=True,
+            )
+            any_failed = True
+            continue
+
+        # Strip part markers from filename so it looks clean in review
+        clean_stem = _strip_part_marker(current.stem) or current.stem
+        clean_name = clean_stem + current.suffix
+        dest = review_dir / clean_name
+        if dest.exists():
+            dest = review_dir / f"{clean_stem}_discarded{current.suffix}"
+        shutil.move(str(current), str(dest))
+
+        record.state = FileState.REVIEW
+        record.current_path = str(dest)
+        record.part_num = None
+        record.total_parts = None
+        record.part_group_key = None
+        record.error_msg = None
+        store.upsert(record)
+
+        click.echo(f"  ↩   {current.name}")
+        click.echo(f"       → review/{dest.name}")
+        click.echo()
+
+    store.close()
+
+    if not any_failed:
+        click.echo(click.style(
+            f"  {len(records)} file(s) moved back to review/.",
+            fg="green",
+        ))
+    else:
+        click.echo(click.style(
+            "  Done (some files were missing — check warnings above).",
+            fg="yellow",
+        ))
+    click.echo("  Run 'libris list-review' to see them.")
     click.echo()
 
 
