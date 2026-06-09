@@ -137,6 +137,8 @@ class DockerCalibre(CalibreBackend):
             "calibredb", "export",
             "--to-dir", container_tmp,
             "--dont-save-cover", "--dont-write-opf",
+            "--single-dir",          # force flat output — without this calibredb creates
+                                     # per-book subdirectories and may write 0 files to dest_dir
             "--template", "{title}",
             str(book_id),
         ]
@@ -154,7 +156,7 @@ class DockerCalibre(CalibreBackend):
             ["docker", "exec", self._container, "rm", "-rf", container_tmp],
             capture_output=True,
         )
-        exported = [f for f in dest_dir.rglob("*") if f.suffix.lower() in _BOOK_EXTENSIONS]
+        exported = [f for f in dest_dir.rglob("*") if f.is_file() and f.suffix.lower() in _BOOK_EXTENSIONS]
         log.info("calibre.docker.exported", extra={"book_id": book_id, "files": [str(f) for f in exported]})
         return exported
 
