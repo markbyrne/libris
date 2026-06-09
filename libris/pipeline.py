@@ -893,10 +893,16 @@ class Pipeline:
             return dup_record
 
         # ── Tag ───────────────────────────────────────────────────────
+        # Always overwrite here: Calibre reads embedded tags at add_book time
+        # to build its directory structure.  If the M4B already contains stale
+        # tags (e.g. preserved via ffmpeg stream-copy during combine_parts) and
+        # overwrite_existing is False, embed_metadata would skip — causing Calibre
+        # to create the wrong author/title directory layout.  The user config
+        # flag applies to the general tagging flow, not this pre-import step.
         audio_tag.embed_metadata(
             m4b_path,
             result,
-            overwrite=self.config.metadata.overwrite_existing,
+            overwrite=True,
         )
 
         # ── Import ────────────────────────────────────────────────────
