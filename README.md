@@ -785,9 +785,26 @@ libris list-pending
   ──────────────────────────────────────────────────
   Force-combine:  libris combine-parts --id <N>
   Combine all:    libris combine-parts --all
+  Merge groups:   libris pair-pending --id1 <N> --id2 <M>
 ```
 
 If a group times out before all parts arrive, the received parts are moved to `review/` with a note. They remain importable via `combine-parts`.
+
+---
+
+### `pair-pending` — merge two pending groups into one
+
+If two groups actually belong to the same audiobook (e.g. parts arrived under different group keys), merge them with `pair-pending`.  Group 2 is absorbed into group 1, parts are re-sequenced, and `total_parts` is updated.  If the merged group is now complete, combine + import is triggered automatically.
+
+```bash
+# Find the two group IDs
+libris list-pending
+
+# Merge group [2] into group [1]
+libris pair-pending --id1 1 --id2 2
+```
+
+If all parts are present after the merge, the set is combined and imported immediately — the same behaviour as `combine-parts --id N`.  If parts are still missing, a warning is shown and you can trigger manually when ready.
 
 ---
 
