@@ -214,6 +214,13 @@ _PART_PAREN_NUM_OF = re.compile(
 _PART_PAREN_BARE = re.compile(
     r'\((\d{1,3})\)\s*$',
 )
+# Compact disc/cd notation without space: "Disc01", "Disc01-001" (disc+track),
+# "CD03".  Only the disc number is used as the part number; a trailing -NNN
+# track counter is consumed but ignored.
+_PART_COMPACT_DISC = re.compile(
+    r'\b(?:disc|disk|cd)(\d+)(?:-\d+)?\b',
+    re.IGNORECASE,
+)
 
 # Strips all of the above from a filename stem
 _PART_STRIP_PATTERNS = (
@@ -224,6 +231,7 @@ _PART_STRIP_PATTERNS = (
     _PART_LONE_BARE,
     _PART_PAREN_NUM_OF,
     _PART_PAREN_BARE,
+    _PART_COMPACT_DISC,
 )
 
 
@@ -252,7 +260,7 @@ def extract_part(raw: str) -> tuple[Optional[int], Optional[int]]:
                 pass
 
     # Lone part number (no total known)
-    for pat in (_PART_LONE_PAREN, _PART_LONE_BARE, _PART_PAREN_BARE):
+    for pat in (_PART_LONE_PAREN, _PART_LONE_BARE, _PART_PAREN_BARE, _PART_COMPACT_DISC):
         m = pat.search(raw)
         if m:
             try:

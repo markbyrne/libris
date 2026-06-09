@@ -793,6 +793,76 @@ class Pipeline:
 
         return last_record
 
+    # ------------------------------------------------------------------
+    # Forced directory combine — public API
+    # ------------------------------------------------------------------
+
+    def import_directory_combined(self, folder: Path) -> FileRecord:
+        """Treat every audio file in *folder* as a part of one audiobook.
+
+        All audio files (non-recursive, sorted by name) are assigned sequential
+        part numbers (1 … N) regardless of their individual filenames, then
+        staged via :meth:`_handle_pending_part`.  When the last file is staged
+        the set is complete and the auto-combine logic in ``_handle_pending_part``
+        fires immediately, producing a single M4B that continues through the
+        normal metadata + Calibre import pipeline.
+
+        The group key is derived from the directory name (part markers stripped),
+        so calling this method twice on the same folder is idempotent — the
+        second call will find the parts already staged and skip them.
+
+        Args:
+            folder: Directory containing the audio files to combine.
+
+        Returns:
+            The :class:`~libris.state.FileRecord` for the combined (or last
+            staged) file.
+
+        Raises:
+            ValueError: If no audio files are found in *folder*.
+        """
+        audio_files = audio_conv.find_audio_files(folder, recursive=False)
+        if not audio_files:
+            raise ValueError(f"No audio files found in {folder}")
+
+        total_parts = len(audio_files)
+        # Stable group key based on the folder name, not individual filenames
+        stripped_stem = strip_part_marker(folder.name)
+        group_key = (clean_query(stripped_stem) or stripped_stem).lower().strip()
+
+        log.info(
+            "pipeline.audio.import_dir_combined",
+            extra={"folder": folder.name, "parts": total_parts, "group": group_key},
+        )
+
+        last_record: Optional[FileRecord] = None
+        for idx, audio_path in enumerate(audio_files, start=1):
+            file_record = self._get_or_create_record(audio_path, "audiobook")
+
+            # Skip parts that are already correctly staged (idempotency)
+            if (
+                file_record.state == FileState.PENDING_PARTS
+                and file_record.part_group_key == group_key
+                and Path(file_record.current_path).exists()
+            ):
+                log.info(
+                    "pipeline.audio.import_dir_skip_staged",
+                    extra={"file": audio_path.name, "part": idx},
+                )
+                last_record = file_record
+                continue
+
+            file_record.state = FileState.PROCESSING
+            self._store.upsert(file_record)
+
+            last_record = self._handle_pending_part(
+                audio_path, file_record, part_num=idx, total_parts=total_parts
+            )
+
+        # last_record is always set: audio_files is non-empty (checked above)
+        assert last_record is not None
+        return last_record
+
     def _resolve_tag_and_import_audio(
         self,
         m4b_path: Path,
