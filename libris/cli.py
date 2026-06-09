@@ -13,6 +13,7 @@ Commands:
   libris recover         — Move failed files back to review/ for re-processing
   libris list-failed     — Show all files in FAILED state
   libris remove          — Permanently delete failed file(s) and their DB records
+  libris prune           — Remove DB records for files manually deleted from disk
   libris list-pending    — Show multi-part audiobooks waiting for sibling parts
   libris combine-parts   — Force-combine a pending part group and import
   libris revert-import   — Remove a book from Calibre and return it to review/
@@ -1597,6 +1598,71 @@ def remove(
     store.close()
     click.echo()
     click.echo(f"  {n_removed} file(s) removed.")
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# prune — remove DB records whose files no longer exist on disk
+# ---------------------------------------------------------------------------
+
+@main.command("prune")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what would be removed without making any changes")
+@_CONFIG_OPTION
+def prune(dry_run: bool, config_path: Optional[Path]) -> None:
+    """Remove stale database records for files that no longer exist on disk.
+
+    Scans FAILED and PENDING_PARTS records and deletes any whose file has
+    been manually removed from disk.  Useful after cleaning up failed/ or
+    staging/pending/ by hand.
+
+    \b
+      libris prune --dry-run   # preview what would be removed
+      libris prune             # apply
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+
+    failed_records  = store.list_by_state(FileState.FAILED)
+    pending_records = store.list_by_state(FileState.PENDING_PARTS)
+
+    stale_failed  = [r for r in failed_records  if not Path(r.current_path).exists()]
+    stale_pending = [r for r in pending_records if not Path(r.current_path).exists()]
+    stale_all     = stale_failed + stale_pending
+
+    tag = click.style("[dry-run] ", fg="cyan") if dry_run else ""
+
+    click.echo()
+    if not stale_all:
+        store.close()
+        click.echo("  No stale records found — nothing to prune.")
+        click.echo()
+        return
+
+    click.echo(f"  {len(stale_all)} stale record(s) found:\n")
+
+    for r in stale_failed:
+        click.echo(click.style(f"  {tag}FAILED   {Path(r.current_path).name}", fg="yellow"))
+        click.echo(f"           {r.current_path}")
+        click.echo()
+
+    for r in stale_pending:
+        click.echo(click.style(f"  {tag}PENDING  {Path(r.current_path).name}", fg="yellow"))
+        click.echo(f"           {r.current_path}")
+        click.echo()
+
+    if not dry_run:
+        for r in stale_all:
+            store.delete(r.id)
+        store.close()
+        click.echo(f"  {len(stale_all)} record(s) pruned.")
+    else:
+        store.close()
+        click.echo(click.style(
+            f"  {len(stale_all)} record(s) would be pruned.  Run without --dry-run to apply.",
+            fg="cyan",
+        ))
     click.echo()
 
 
