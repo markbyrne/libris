@@ -3,6 +3,7 @@
 Commands:
   libris run             — Start the watcher daemon
   libris import-one      — Process a single file (Mac dev / testing)
+  libris import-dir      — Import a directory of audio files as one audiobook
   libris check-config    — Validate config and print resolved values
   libris list-review     — Show all files in REVIEW state
   libris show-cover      — Open the matched cover image in the default browser
@@ -468,6 +469,79 @@ def import_one(file_path: Path, config_path: Optional[Path]) -> None:
     click.echo()
 
     # Exit 0 for any controlled disposition; 1 only for genuine failure
+    sys.exit(0 if record.state in (FileState.IMPORTED, FileState.REVIEW, FileState.PENDING_PARTS) else 1)
+
+
+@main.command("import-dir")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path))
+@click.option(
+    "--combine-all",
+    "combine_all",
+    is_flag=True,
+    default=False,
+    help="Treat all audio files as parts of one audiobook (ignores per-file part markers).",
+)
+@_CONFIG_OPTION
+def import_dir(directory: Path, combine_all: bool, config_path: Optional[Path]) -> None:
+    """Import a directory of audio files as an audiobook.
+
+    Without --combine-all, each file is processed individually through the
+    normal pipeline — files with part markers are grouped and combined, files
+    without are imported as standalone books.
+
+    With --combine-all, every audio file in the directory is treated as a
+    sequential part of one audiobook regardless of filenames.  All parts are
+    combined into a single M4B before metadata lookup and Calibre import.
+    This is useful for directories like:
+
+    \b
+        D.J. MacHale-Book01-The Merchant of Death/
+          Book01-Merchant of Death-Disc01-001.mp3
+          Book01-Merchant of Death-Disc01-002.mp3
+          ...
+          Book01-Merchant of Death-Disc10-010.mp3
+
+    where the per-file part marker pattern is not recognised automatically.
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+
+    folder = directory.resolve()
+    pipeline = Pipeline(config)
+
+    if combine_all:
+        try:
+            record = pipeline.import_directory_combined(folder)
+        except ValueError as exc:
+            _die(str(exc))
+            return  # unreachable; satisfies type checker
+    else:
+        record = pipeline.process_file(folder)
+
+    click.echo()
+    status = (
+        "✅" if record.state == FileState.IMPORTED
+        else ("🔍" if record.state == FileState.REVIEW
+              else ("⏳" if record.state == FileState.PENDING_PARTS
+                    else "❌"))
+    )
+    click.echo(f"  {status}  {folder.name}")
+    click.echo(_hr())
+    click.echo(f"  Result:  {record.state.value}")
+    if record.matched_title:
+        click.echo(f"  Title:   {record.matched_title}")
+    if record.matched_author:
+        click.echo(f"  Author:  {record.matched_author}")
+    if record.confidence is not None:
+        click.echo(f"  Score:   {record.confidence:.2f}")
+    if record.error_msg:
+        if record.state == FileState.IMPORTED:
+            click.echo(f"  Note:    {record.error_msg}")
+        else:
+            click.echo(f"  Error:   {record.error_msg}", err=True)
+    click.echo()
+
     sys.exit(0 if record.state in (FileState.IMPORTED, FileState.REVIEW, FileState.PENDING_PARTS) else 1)
 
 

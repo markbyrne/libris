@@ -390,6 +390,35 @@ If the score is below the confidence threshold the file is moved to `review/` in
 
 ---
 
+### `import-dir` — import a directory of audio files
+
+```bash
+libris import-dir /path/to/audiobook-directory
+libris import-dir /path/to/audiobook-directory --combine-all
+```
+
+Imports all audio files in a directory as an audiobook.
+
+**Without `--combine-all`** (default): each file is dispatched through the normal pipeline individually. Files whose names contain recognised part markers are grouped and combined; files without markers are imported as standalone books.
+
+**With `--combine-all`**: every audio file in the directory is treated as a sequential part of *one* audiobook, regardless of filenames. Parts are assigned numbers in sorted filename order, combined into a single M4B with chapter markers, and imported as one book. Use this when the files have non-standard part notation that the automatic detector doesn't recognise, for example:
+
+```
+D.J. MacHale-Book01-The Merchant of Death/
+  Book01-Merchant of Death-Disc01-001.mp3   ← part 1 of 100
+  Book01-Merchant of Death-Disc01-002.mp3   ← part 2 of 100
+  ...
+  Book01-Merchant of Death-Disc10-010.mp3   ← part 100 of 100
+```
+
+```bash
+libris import-dir "D.J. MacHale-Book01-The Merchant of Death" --combine-all
+```
+
+Output follows the same format as `import-one`.
+
+---
+
 ### `run` — start the daemon
 
 ```bash
@@ -958,6 +987,8 @@ Libris detects split audiobooks by filename pattern and holds them in staging un
 | `Eragon (1 of 2).mp3` | Part 1 of 2 (no keyword needed) |
 | `Eragon (1/2).mp3` | Part 1 of 2 (slash form) |
 | `Eragon (1).mp3` | Part 1 (total unknown) |
+| `Book01-Merchant of Death-Disc01-001.mp3` | Part 1 (compact DiscNN form) |
+| `Book01-Merchant of Death-CD03.mp3` | Part 3 (compact CDnn form) |
 
 The `part`/`disc`/`cd` keyword is optional — bare sequential numbers in parentheses at the end of a filename are also recognised. This covers the common convention of downloaders naming files `Book Title (1).mp3`, `Book Title (2).mp3`, etc.
 
