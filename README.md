@@ -759,6 +759,19 @@ Each deleted filename is echoed so you have a record of what was removed. A summ
 
 ---
 
+### `prune` — remove stale database records
+
+When files are deleted manually from `failed/` or `staging/pending/` (outside of Libris), the database still holds records for them. `prune` finds and removes those orphaned entries.
+
+```bash
+libris prune --dry-run   # preview what would be removed
+libris prune             # apply
+```
+
+Both FAILED and PENDING_PARTS records are scanned. Only records whose `current_path` no longer exists on disk are removed.
+
+---
+
 ### `list-pending` — check multi-part audiobooks in progress
 
 Shows all multi-part audiobooks currently waiting for their sibling parts. Once all parts have arrived they are combined automatically.
