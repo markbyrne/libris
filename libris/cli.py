@@ -2858,9 +2858,11 @@ def migrate_library(
             if len(conflicts) > 5:
                 click.echo(f"        … and {len(conflicts) - 5} more")
             click.echo()
+            click.echo("  Options: overwrite (replace dest), skip (keep both), "
+                       "remove (delete source, keep dest), abort (stop)")
             conflict_choice = click.prompt(
                 "  Conflict resolution",
-                type=click.Choice(["overwrite", "skip", "abort"], case_sensitive=False),
+                type=click.Choice(["overwrite", "skip", "abort", "remove"], case_sensitive=False),
                 default="skip",
             )
             if conflict_choice == "abort":
@@ -2894,11 +2896,17 @@ def migrate_library(
     to_path.mkdir(parents=True, exist_ok=True)
 
     if books_only:
-        n_moved = n_skipped = 0
+        n_moved = n_skipped = n_removed = 0
         for src, dest in candidates:
-            if dest.exists() and conflict_choice == "skip":
-                n_skipped += 1
-                continue
+            if dest.exists():
+                if conflict_choice == "skip":
+                    n_skipped += 1
+                    continue
+                elif conflict_choice == "remove":
+                    src.unlink()
+                    n_removed += 1
+                    continue
+                # "overwrite" falls through to shutil.move below
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dest))
             n_moved += 1
@@ -2914,6 +2922,8 @@ def migrate_library(
         summary = f"  ✓ {n_moved} file(s) moved to {to_path}"
         if n_skipped:
             summary += f" ({n_skipped} skipped — already present at destination)"
+        if n_removed:
+            summary += f" ({n_removed} removed from source — already present at destination)"
         click.echo(summary)
 
         # Update config for split-library mode
