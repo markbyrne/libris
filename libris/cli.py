@@ -13,8 +13,10 @@ Commands:
   libris recover         — Move failed files back to review/ for re-processing
   libris list-failed     — Show all files in FAILED state
   libris remove          — Permanently delete failed file(s) and their DB records
+  libris prune           — Remove DB records for files manually deleted from disk
   libris list-pending    — Show multi-part audiobooks waiting for sibling parts
   libris pair-pending    — Merge two pending groups into one
+  libris pending-discard — Move a pending part group back to review/
   libris combine-parts   — Force-combine a pending part group and import
   libris revert-import   — Remove a book from Calibre and return it to review/
   libris search          — Search the Calibre library (uses library path from config)
@@ -1390,8 +1392,9 @@ def recover(
             record.error_msg = "Deleted by user from failed queue"
             store.upsert(record)
             click.echo(f"  🗑   {name}")
+        remaining = store.list_by_state(FileState.FAILED)
         store.close()
-        click.echo()
+        _render_failed_list(remaining)
         return
 
     # ── Determine targets for recovery ────────────────────────────────────
@@ -1435,11 +1438,15 @@ def recover(
         click.echo(f"       → review/{dest.name}")
         click.echo()
 
+    remaining = store.list_by_state(FileState.FAILED)
     store.close()
     click.echo(_hr())
     click.echo("  Run 'libris list-review' to confirm.")
     click.echo("  Run 'libris rematch --id <N>' to fix the metadata match.")
     click.echo()
+    if remaining:
+        click.echo("  Updated failed queue:")
+        _render_failed_list(remaining)
     sys.exit(1 if any_failed else 0)
 
 
@@ -1465,21 +1472,12 @@ def _age_str(created_at) -> str:
     return f"{mins}m"
 
 
-@main.command("list-failed")
-@_CONFIG_OPTION
-def list_failed(config_path: Optional[Path]) -> None:
-    """Show all files currently in FAILED state.
+def _render_failed_list(records: list) -> None:
+    """Render the failed queue in the standard list-failed format.
 
-    Displays each file, its error message, and how long it has been there.
-    Use 'libris recover' to move files back to review/, or
-    'libris remove' to permanently delete them.
+    Shared by list-failed, remove, and recover so they all show the same
+    updated view after completing their action.
     """
-    path = _resolve_config(config_path)
-    config = load_config(path)
-    store = _open_store(config.paths.state_db)
-    records = store.list_by_state(FileState.FAILED)
-    store.close()
-
     click.echo()
     if not records:
         click.echo("  No files in failed state.")
@@ -1518,6 +1516,23 @@ def list_failed(config_path: Optional[Path]) -> None:
             fg="yellow",
         ))
     click.echo()
+
+
+@main.command("list-failed")
+@_CONFIG_OPTION
+def list_failed(config_path: Optional[Path]) -> None:
+    """Show all files currently in FAILED state.
+
+    Displays each file, its error message, and how long it has been there.
+    Use 'libris recover' to move files back to review/, or
+    'libris remove' to permanently delete them.
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+    records = store.list_by_state(FileState.FAILED)
+    store.close()
+    _render_failed_list(records)
 
 
 # ---------------------------------------------------------------------------
@@ -1595,9 +1610,75 @@ def remove(
         click.echo(f"  🗑   {name}")
         n_removed += 1
 
+    remaining = store.list_by_state(FileState.FAILED)
     store.close()
     click.echo()
     click.echo(f"  {n_removed} file(s) removed.")
+    _render_failed_list(remaining)
+
+
+# ---------------------------------------------------------------------------
+# prune — remove DB records whose files no longer exist on disk
+# ---------------------------------------------------------------------------
+
+@main.command("prune")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what would be removed without making any changes")
+@_CONFIG_OPTION
+def prune(dry_run: bool, config_path: Optional[Path]) -> None:
+    """Remove stale database records for files that no longer exist on disk.
+
+    Scans FAILED and PENDING_PARTS records and deletes any whose file has
+    been manually removed from disk.  Useful after cleaning up failed/ or
+    staging/pending/ by hand.
+
+    \b
+      libris prune --dry-run   # preview what would be removed
+      libris prune             # apply
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+
+    failed_records  = store.list_by_state(FileState.FAILED)
+    pending_records = store.list_by_state(FileState.PENDING_PARTS)
+
+    stale_failed  = [r for r in failed_records  if not Path(r.current_path).exists()]
+    stale_pending = [r for r in pending_records if not Path(r.current_path).exists()]
+    stale_all     = stale_failed + stale_pending
+
+    tag = click.style("[dry-run] ", fg="cyan") if dry_run else ""
+
+    click.echo()
+    if not stale_all:
+        store.close()
+        click.echo("  No stale records found — nothing to prune.")
+        click.echo()
+        return
+
+    click.echo(f"  {len(stale_all)} stale record(s) found:\n")
+
+    for r in stale_failed:
+        click.echo(click.style(f"  {tag}FAILED   {Path(r.current_path).name}", fg="yellow"))
+        click.echo(f"           {r.current_path}")
+        click.echo()
+
+    for r in stale_pending:
+        click.echo(click.style(f"  {tag}PENDING  {Path(r.current_path).name}", fg="yellow"))
+        click.echo(f"           {r.current_path}")
+        click.echo()
+
+    if not dry_run:
+        for r in stale_all:
+            store.delete(r.id)
+        store.close()
+        click.echo(f"  {len(stale_all)} record(s) pruned.")
+    else:
+        store.close()
+        click.echo(click.style(
+            f"  {len(stale_all)} record(s) would be pruned.  Run without --dry-run to apply.",
+            fg="cyan",
+        ))
     click.echo()
 
 
@@ -1671,7 +1752,100 @@ def list_pending(config_path: Optional[Path]) -> None:
     click.echo(_hr())
     click.echo("  Force-combine:  libris combine-parts --id <N>")
     click.echo("  Combine all:    libris combine-parts --all")
+    click.echo("  Discard group:  libris pending-discard --id <N>")
     click.echo("  Merge groups:   libris pair-pending --id1 <N> --id2 <M>")
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# pending-discard — send a pending group back to review
+# ---------------------------------------------------------------------------
+
+@main.command("pending-discard")
+@click.option("--id", "group_id", required=True, type=int,
+              help="Pending group position (from 'libris list-pending')")
+@_CONFIG_OPTION
+def pending_discard(group_id: int, config_path: Optional[Path]) -> None:
+    """Move a pending part group back to review/ for re-processing.
+
+    Strips part markers from filenames, clears part tracking metadata, and
+    moves each file back to review/ with state REVIEW.  Use this when a
+    group was assembled incorrectly or files were marked as parts by mistake.
+
+    \b
+      libris list-pending                 # find the group ID
+      libris pending-discard --id 1       # move group [1] back to review
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+
+    groups = store.list_pending_groups()
+    if not groups:
+        store.close()
+        click.echo("\n  No pending groups.\n")
+        return
+
+    group_list = list(groups.items())
+    if group_id < 1 or group_id > len(group_list):
+        store.close()
+        _die(
+            f"ID {group_id} out of range — {len(group_list)} pending group(s).\n"
+            "  Run 'libris list-pending' to see current IDs."
+        )
+
+    group_key, records = group_list[group_id - 1]
+    review_dir = config.paths.review_dir
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    click.echo()
+    click.echo(f"  Discarding pending group: {click.style(group_key, bold=True)}")
+    click.echo()
+
+    any_failed = False
+    for record in records:
+        current = Path(record.current_path)
+        if not current.exists():
+            click.echo(
+                click.style(f"  ⚠   File not found, skipping: {current}", fg="yellow"),
+                err=True,
+            )
+            any_failed = True
+            continue
+
+        # Strip part markers from filename so it looks clean in review
+        clean_stem = _strip_part_marker(current.stem) or current.stem
+        clean_name = clean_stem + current.suffix
+        dest = review_dir / clean_name
+        if dest.exists():
+            dest = review_dir / f"{clean_stem}_discarded{current.suffix}"
+        shutil.move(str(current), str(dest))
+
+        record.state = FileState.REVIEW
+        record.current_path = str(dest)
+        record.part_num = None
+        record.total_parts = None
+        record.part_group_key = None
+        record.error_msg = None
+        store.upsert(record)
+
+        click.echo(f"  ↩   {current.name}")
+        click.echo(f"       → review/{dest.name}")
+        click.echo()
+
+    store.close()
+
+    if not any_failed:
+        click.echo(click.style(
+            f"  {len(records)} file(s) moved back to review/.",
+            fg="green",
+        ))
+    else:
+        click.echo(click.style(
+            "  Done (some files were missing — check warnings above).",
+            fg="yellow",
+        ))
+    click.echo("  Run 'libris list-review' to see them.")
     click.echo()
 
 
