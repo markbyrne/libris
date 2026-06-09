@@ -10,6 +10,7 @@ Handles:
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -72,6 +73,7 @@ def combine_parts(
         raise ValueError("part_files must not be empty")
 
     parts = sorted(part_files, key=lambda p: p.name.lower())
+    _check_disk_space(parts, output_path)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -117,7 +119,6 @@ def combine_parts(
 
         # ── Copy to final destination ─────────────────────────────────────
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        import shutil
         shutil.copy2(str(with_chapters), str(output_path))
 
     log.info(
@@ -133,6 +134,52 @@ def find_audio_files(directory: Path, recursive: bool = True) -> list[Path]:
         p for p in directory.glob(pattern)
         if p.is_file() and p.suffix.lstrip(".").lower() in AUDIO_EXTENSIONS
     )
+
+
+def _fmt_bytes(n: int) -> str:
+    """Format a byte count as a human-readable string (GB or MB)."""
+    if n >= 1024 ** 3:
+        return f"{n / 1024**3:.1f} GB"
+    return f"{n / 1024**2:.1f} MB"
+
+
+def _check_disk_space(parts: list[Path], output_path: Path) -> None:
+    """Raise ConversionError if there is insufficient disk space to combine parts.
+
+    Two intermediate M4B files (each approximately the total input size) are
+    written to the system temp directory during combining.  The final file is
+    then copied to output_path.parent.
+
+    Safety margins:
+      - Temp dir  : 2.5× total input size (two full-size intermediates + headroom)
+      - Output dir: 1.1× total input size (one copy + headroom)
+
+    Args:
+        parts: Ordered list of source audio files.
+        output_path: Destination path for the final M4B.
+
+    Raises:
+        ConversionError: If either directory has insufficient free space.
+    """
+    total_size = sum(p.stat().st_size for p in parts if p.exists())
+
+    tmp_dir = Path(tempfile.gettempdir())
+    tmp_free = shutil.disk_usage(tmp_dir).free
+    tmp_needed = int(total_size * 2.5)
+    if tmp_free < tmp_needed:
+        raise ConversionError(
+            f"Insufficient disk space: need ~{_fmt_bytes(tmp_needed)} free in "
+            f"{tmp_dir} (temp dir), have {_fmt_bytes(tmp_free)}"
+        )
+
+    out_dir = output_path.parent
+    out_free = shutil.disk_usage(out_dir).free
+    out_needed = int(total_size * 1.1)
+    if out_free < out_needed:
+        raise ConversionError(
+            f"Insufficient disk space: need ~{_fmt_bytes(out_needed)} free in "
+            f"{out_dir} (output dir), have {_fmt_bytes(out_free)}"
+        )
 
 
 # ---------------------------------------------------------------------------

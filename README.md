@@ -306,6 +306,18 @@ Environment variable: `LIBRIS_OUTPUT_EBOOK_FORMAT_POLICY`
 
 Parts are held in staging until the complete set is received. If parts are missing after a configurable timeout, they are escalated to the review queue:
 
+### Disk space requirements for M4B combining
+
+Before combining multi-part audiobooks, Libris checks that there is enough free space to complete the operation. Two intermediate files (each approximately the combined size of all parts) are written to the system temp directory, and the final file is copied to the output location. If either directory is too tight, a clear error is shown before ffmpeg starts:
+
+```
+ConversionError: Insufficient disk space: need ~3.5 GB free in /tmp (temp dir), have 1.2 GB
+```
+
+Minimum space requirements:
+- **Temp dir** (`/tmp` or `$TMPDIR`): 2.5× the total size of all parts
+- **Output dir**: 1.1× the total size of all parts
+
 ```yaml
 multipart:
   timeout_hours: 48   # default; set to 0 to disable automatic escalation
