@@ -425,7 +425,7 @@ Output follows the same format as `import-one`.
 libris run
 ```
 
-Watches `incoming_dir` continuously and processes files as they arrive. Drop any ebook or audiobook into the directory and it will be imported automatically. Ctrl-C to stop.
+Watches `incoming_dir` continuously and processes files as they arrive. Drop any ebook or audiobook — or an entire directory tree — into the folder and it will be imported automatically. Ctrl-C to stop.
 
 On startup, the incoming folder is scanned immediately so any files that arrived while the daemon was offline are processed without waiting. A background thread re-scans the folder periodically (default every hour) as an additional safety net.
 
@@ -1122,25 +1122,38 @@ Duplicate candidates (same book, different editions) are deduplicated before sco
 
 All ebook formats are converted to your `preferred_ebook_format` (default: epub) before import unless `ebook_format_policy: all` is set.
 
-Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Audiobook folders (a directory of audio files) are also supported — drop the whole directory into `incoming/` and each file is dispatched individually through the normal pipeline.
+Multi-part audiobooks (split files with part markers in the filename) are automatically staged and combined. Dropping a whole directory into `incoming/` is fully supported — Libris walks the entire directory tree recursively and dispatches every book file it finds.
 
-Files without part markers are imported as standalone books. Files with matching part markers are automatically grouped and combined. A single directory can contain a mix of standalone books, multi-part series, and ebooks — every file is routed through its correct pipeline:
+**How directories are handled:**
+
+- Audio files are grouped by the directory that directly contains them:
+  - **One audio file** in a directory → imported as a standalone audiobook
+  - **Multiple audio files** in the same directory → treated as parts of one audiobook and combined into a single M4B before import
+- Ebook files at any depth are each dispatched individually through the ebook pipeline (conversion + Calibre import), regardless of how many share a directory
+- The original directory tree is removed once all files have been extracted
+
+This means you can drop an entire author or series folder — even with multiple levels of nesting — and every file is routed correctly:
 
 ```
 incoming/
-  Christopher Paolini/
-    Eragon.m4b                         → audiobook import ✅
-    Eldest.m4b                         → audiobook import ✅
-    Brisingr (part 1 of 3).m4b  ┐
-    Brisingr (part 2 of 3).m4b  ├──── combined → Brisingr.m4b → Calibre ✅
-    Brisingr (part 3 of 3).m4b  ┘
-    Inheritance (part 1 of 3).m4b  ┐
-    Inheritance (part 2 of 3).m4b  ├── combined → Inheritance.m4b → Calibre ✅
-    Inheritance (part 3 of 3).m4b  ┘
-    Eragon.epub                        → ebook import ✅
+  Christopher Paolini/                    ← drop this whole folder
+    Eragon.m4b                            → standalone audiobook import ✅
+    Eldest/
+      Eldest.m4b                          → standalone audiobook import ✅
+    Brisingr/
+      Brisingr - Part 1.m4b  ┐
+      Brisingr - Part 2.m4b  ├─ combined → Brisingr.m4b → Calibre ✅
+      Brisingr - Part 3.m4b  ┘
+    Inheritance Cycle/
+      Inheritance - Part 1.m4b  ┐
+      Inheritance - Part 2.m4b  ├─ combined → Inheritance.m4b → Calibre ✅
+      Inheritance - Part 3.m4b  ┘
+    Eragon.epub                           → ebook import ✅
+    Extras/
+      Eragon (Special Edition).epub       → ebook import ✅
 ```
 
-Ebook files found alongside audiobooks in the same directory are processed through the ebook pipeline (conversion + Calibre import) in the same pass. The directory is removed once all files have been dispatched.
+Ebook-only directories are handled the same way — each ebook file at any depth is extracted and processed individually.
 
 ---
 
