@@ -891,6 +891,15 @@ calibre:
 
 This matches calibre-web's **"Separate Book Files from Library"** setting and pairs directly with Libris's split-library support (Issue #18). After migration, new imports are automatically placed under `book_file_path`.
 
+**Conflict resolution (`--books-only`):** When files already exist at the destination, you are prompted to choose:
+
+| Option | Behaviour |
+|--------|-----------|
+| `skip` | Leave both source and destination unchanged (default) |
+| `overwrite` | Replace the destination file with the source |
+| `remove` | Delete the source file, keep the destination — useful when the dest already has the correct copy and you want to clean up the source |
+| `abort` | Stop immediately, no files moved |
+
 **Full library move:**
 
 ```bash
