@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from libris.audio.converter import _check_disk_space, _fmt_bytes
+from libris.audio.converter import _check_disk_space, _choose_tmp_dir, _fmt_bytes
 from libris.exceptions import ConversionError
 
 
@@ -58,7 +58,7 @@ class TestCheckDiskSpace:
         output = tmp_path / "out.m4b"
 
         tight = MagicMock()
-        tight.free = 50 * 1024 ** 2  # only 50 MB free — not enough for 2.5× = 250 MB
+        tight.free = 50 * 1024 ** 2  # only 50 MB free — not enough for 2.1× = 210 MB
         with patch("libris.audio.converter.shutil.disk_usage", return_value=tight):
             with pytest.raises(ConversionError, match="Insufficient disk space"):
                 _check_disk_space(parts, output)
@@ -120,3 +120,72 @@ class TestCheckDiskSpace:
         with patch("libris.audio.converter.shutil.disk_usage", return_value=huge):
             # Should not raise (missing file doesn't inflate the required size)
             _check_disk_space([existing, missing], output)
+
+
+# ---------------------------------------------------------------------------
+# _choose_tmp_dir
+# ---------------------------------------------------------------------------
+
+class TestChooseTmpDir:
+    """Tests for the smart temp-dir selection with /tmp fallback."""
+
+    def _make_parts(self, tmp_path: Path, sizes: list[int]) -> list[Path]:
+        parts = []
+        for i, size in enumerate(sizes):
+            p = tmp_path / f"part{i:02d}.m4b"
+            p.write_bytes(b"x" * size)
+            parts.append(p)
+        return parts
+
+    def test_uses_system_tmp_when_sufficient(self, tmp_path):
+        """Returns system temp dir when it has enough free space."""
+        import tempfile
+        parts = self._make_parts(tmp_path, [100 * 1024 ** 2])  # 100 MB
+        output = tmp_path / "out.m4b"
+
+        huge = MagicMock(free=10 * 1024 ** 3)  # 10 GB everywhere
+        with patch("libris.audio.converter.shutil.disk_usage", return_value=huge):
+            result = _choose_tmp_dir(parts, output)
+        assert result == Path(tempfile.gettempdir())
+
+    def test_falls_back_to_output_dir_when_tmp_tight(self, tmp_path):
+        """Falls back to output_path.parent when /tmp is tight but output dir has room."""
+        parts = self._make_parts(tmp_path, [100 * 1024 ** 2])  # 100 MB
+        output = tmp_path / "subdir" / "out.m4b"
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        call_count = 0
+
+        def _fake_usage(path):
+            nonlocal call_count
+            call_count += 1
+            m = MagicMock()
+            # First call = sys_tmp (tight), second call = out_dir (plenty)
+            m.free = 50 * 1024 ** 2 if call_count == 1 else 10 * 1024 ** 3
+            return m
+
+        with patch("libris.audio.converter.shutil.disk_usage", side_effect=_fake_usage):
+            result = _choose_tmp_dir(parts, output)
+        assert result == output.parent
+
+    def test_raises_when_both_dirs_insufficient(self, tmp_path):
+        """ConversionError with TMPDIR hint when neither location has enough space."""
+        parts = self._make_parts(tmp_path, [100 * 1024 ** 2])  # 100 MB
+        output = tmp_path / "out.m4b"
+
+        tiny = MagicMock(free=50 * 1024 ** 2)  # 50 MB everywhere — not enough
+        with patch("libris.audio.converter.shutil.disk_usage", return_value=tiny):
+            with pytest.raises(ConversionError, match="TMPDIR"):
+                _choose_tmp_dir(parts, output)
+
+    def test_error_message_includes_tmpdir_hint(self, tmp_path):
+        """The ConversionError message includes a TMPDIR usage example."""
+        parts = self._make_parts(tmp_path, [500 * 1024 ** 2])  # 500 MB
+        output = tmp_path / "out.m4b"
+
+        tiny = MagicMock(free=10 * 1024 ** 2)  # 10 MB — clearly not enough
+        with patch("libris.audio.converter.shutil.disk_usage", return_value=tiny):
+            with pytest.raises(ConversionError) as exc_info:
+                _choose_tmp_dir(parts, output)
+        assert "TMPDIR" in str(exc_info.value)
+        assert "temp dir" in str(exc_info.value)

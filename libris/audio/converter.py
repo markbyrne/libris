@@ -73,9 +73,10 @@ def combine_parts(
         raise ValueError("part_files must not be empty")
 
     parts = sorted(part_files, key=lambda p: p.name.lower())
-    _check_disk_space(parts, output_path)
+    _tmp_base = _choose_tmp_dir(parts, output_path)
+    _check_disk_space(parts, output_path, tmp_dir=_tmp_base)
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(dir=_tmp_base) as tmp:
         tmp_path = Path(tmp)
         filelist = tmp_path / "filelist.txt"
         metadata_file = tmp_path / "chapters.ffmeta"
@@ -143,33 +144,73 @@ def _fmt_bytes(n: int) -> str:
     return f"{n / 1024**2:.1f} MB"
 
 
-def _check_disk_space(parts: list[Path], output_path: Path) -> None:
+def _choose_tmp_dir(parts: list[Path], output_path: Path) -> Path:
+    """Return the best temp directory for M4B combining.
+
+    Prefers the system temp dir.  If it lacks the space for both intermediate
+    files (2.1× total input size), transparently falls back to output_path.parent
+    whose filesystem typically has ample room.  When using the output directory
+    as temp, peak usage is ~3.2× (two intermediates + the final copy all on the
+    same filesystem simultaneously).
+
+    Raises ConversionError if neither location has enough free space.
+    """
+    total_size = sum(p.stat().st_size for p in parts if p.exists())
+    tmp_needed = int(total_size * 2.1)
+
+    sys_tmp = Path(tempfile.gettempdir())
+    if shutil.disk_usage(sys_tmp).free >= tmp_needed:
+        return sys_tmp
+
+    # /tmp is tight — try the output directory's filesystem instead.
+    out_dir = output_path.parent
+    out_needed = int(total_size * 3.2)  # two intermediates + final copy, same volume
+    if shutil.disk_usage(out_dir).free >= out_needed:
+        log.info(
+            "audio.combine.tmp_fallback",
+            extra={"dir": str(out_dir), "reason": "system temp low on space"},
+        )
+        return out_dir
+
+    # Neither works — tell the user how to point to a better temp location.
+    sys_free = shutil.disk_usage(sys_tmp).free
+    raise ConversionError(
+        f"Insufficient disk space: need ~{_fmt_bytes(tmp_needed)} free in "
+        f"{sys_tmp} (temp dir), have {_fmt_bytes(sys_free)}. "
+        f"Set TMPDIR to a directory with more space, e.g.: "
+        f"TMPDIR=/path/with/space libris combine-parts …"
+    )
+
+
+def _check_disk_space(parts: list[Path], output_path: Path, tmp_dir: Path | None = None) -> None:
     """Raise ConversionError if there is insufficient disk space to combine parts.
 
     Two intermediate M4B files (each approximately the total input size) are
-    written to the system temp directory during combining.  The final file is
-    then copied to output_path.parent.
+    written to *tmp_dir* during combining; the final file is then copied to
+    output_path.parent.
 
     Safety margins:
-      - Temp dir  : 2.5× total input size (two full-size intermediates + headroom)
+      - Temp dir  : 2.1× total input size (two full-size intermediates + headroom)
       - Output dir: 1.1× total input size (one copy + headroom)
 
     Args:
         parts: Ordered list of source audio files.
         output_path: Destination path for the final M4B.
+        tmp_dir: Directory used for intermediate files.  Defaults to the system
+                 temp dir (``tempfile.gettempdir()``).
 
     Raises:
         ConversionError: If either directory has insufficient free space.
     """
     total_size = sum(p.stat().st_size for p in parts if p.exists())
 
-    tmp_dir = Path(tempfile.gettempdir())
-    tmp_free = shutil.disk_usage(tmp_dir).free
-    tmp_needed = int(total_size * 2.5)
+    _tmp_dir = tmp_dir if tmp_dir is not None else Path(tempfile.gettempdir())
+    tmp_free = shutil.disk_usage(_tmp_dir).free
+    tmp_needed = int(total_size * 2.1)
     if tmp_free < tmp_needed:
         raise ConversionError(
             f"Insufficient disk space: need ~{_fmt_bytes(tmp_needed)} free in "
-            f"{tmp_dir} (temp dir), have {_fmt_bytes(tmp_free)}"
+            f"{_tmp_dir} (temp dir), have {_fmt_bytes(tmp_free)}"
         )
 
     out_dir = output_path.parent

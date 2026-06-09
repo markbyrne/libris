@@ -308,15 +308,27 @@ Parts are held in staging until the complete set is received. If parts are missi
 
 ### Disk space requirements for M4B combining
 
-Before combining multi-part audiobooks, Libris checks that there is enough free space to complete the operation. Two intermediate files (each approximately the combined size of all parts) are written to the system temp directory, and the final file is copied to the output location. If either directory is too tight, a clear error is shown before ffmpeg starts:
+Before combining multi-part audiobooks, Libris checks that there is enough free space to complete the operation. Two intermediate files (each approximately the combined size of all parts) are written to a temp directory, and the final file is copied to the output location.
 
-```
-ConversionError: Insufficient disk space: need ~3.5 GB free in /tmp (temp dir), have 1.2 GB
-```
+**Automatic temp-dir fallback:** Libris first tries the system temp dir (`/tmp`). If `/tmp` is tight, it automatically falls back to using the output directory's filesystem as the temp location — no configuration needed for most setups.
 
 Minimum space requirements:
-- **Temp dir** (`/tmp` or `$TMPDIR`): 2.5× the total size of all parts
+- **Temp dir** (`/tmp` or `$TMPDIR`): 2.1× the total size of all parts
 - **Output dir**: 1.1× the total size of all parts
+- **Output dir (when used as temp fallback)**: 3.2× the total size of all parts
+
+If neither location has enough space, a clear error is shown before ffmpeg starts:
+
+```
+ConversionError: Insufficient disk space: need ~2.2 GB free in /tmp (temp dir), have 1.7 GB.
+Set TMPDIR to a directory with more space, e.g.: TMPDIR=/mnt/media libris combine-parts …
+```
+
+To point Libris at a specific temp directory:
+
+```bash
+TMPDIR=/mnt/media/tmp libris process   # or any other libris command
+```
 
 ```yaml
 multipart:
