@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..classifier import AUDIO_EXTENSIONS as _AUDIO_EXT
+from ..classifier import EBOOK_EXTENSIONS as _EBOOK_EXT
 from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
@@ -15,7 +17,11 @@ from .base import CalibreBackend
 
 log = logging.getLogger(__name__)
 
-_BOOK_EXTENSIONS = {".epub", ".m4b", ".mp3", ".mobi", ".azw3", ".pdf", ".cbz", ".cbr", ".djvu"}
+# Derived from the classifier's extension sets so export detection stays in sync
+# when new formats are added to either set.  Dot-prefixed for Path.suffix comparison.
+_BOOK_EXTENSIONS: frozenset[str] = frozenset(
+    f".{ext}" for ext in (*_EBOOK_EXT, *_AUDIO_EXT)
+)
 
 
 class LocalCalibre(CalibreBackend):
