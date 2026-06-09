@@ -1410,6 +1410,16 @@ Files already imported into Calibre are unaffected. Files in `review/` and `fail
 
 ---
 
+### Audiobook imported to wrong directory structure
+
+If a book is imported to a path like `Books/Inheritance Cycle 3/Inheritance Cycle 3 - Brisingr (100)/` instead of `Books/Paolini, Christopher/Brisingr (100)/`, the M4B contained stale embedded tags at import time that Calibre used to build the directory name.
+
+This happened when `metadata.overwrite_existing: false` was set and the M4B already had embedded tags (preserved from source files during multi-part combine). Libris now always re-embeds the resolved metadata into the file immediately before `calibredb add`, regardless of the `overwrite_existing` setting. The config flag still controls whether tags are overwritten during the general tagging flow — only the mandatory pre-import step is now unconditional.
+
+If you have already-imported books with the wrong path, use `libris revert-import` to remove them and re-import, or rename the directory in your Calibre library and run `calibredb check_library` to rescan.
+
+---
+
 ### `import-one` says "refusing to import symlink"
 
 Libris rejects symlinks in the incoming directory as a security measure — a symlink could point to arbitrary files on the host. Copy the actual file instead of symlinking it.
