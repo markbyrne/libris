@@ -719,7 +719,7 @@ libris recover --id 1
 libris recover --all
 ```
 
-After recovery, files appear in `libris list-review` and can be fixed with `libris rematch`.
+After recovery, files appear in `libris list-review` and can be fixed with `libris rematch`. The updated failed queue is reprinted automatically so you can see what still needs attention.
 
 #### Deleting unrecoverable files
 
@@ -755,7 +755,7 @@ libris remove --all
 libris remove --chaff
 ```
 
-Each deleted filename is echoed so you have a record of what was removed. A summary count is printed at the end.
+Each deleted filename is echoed so you have a record of what was removed. A summary count is printed at the end, followed by the updated failed queue so you can see what still needs attention.
 
 ---
 
