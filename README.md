@@ -1423,11 +1423,15 @@ Files already imported into Calibre are unaffected. Files in `review/` and `fail
 
 ---
 
-### `revert-import` reports "calibredb export returned no files"
+### `revert-import` / `audit-library` reports "export returned no files"
 
-This could mean the book ID is wrong, but if the ID is correct and the book appears in `libris revert-import --search`, the cause was a missing `--single-dir` flag on the `calibredb export` command. Without it, calibredb creates per-book subdirectories inside the export destination — in certain conditions no files appear at the top level (rc=0, silent) and Libris reports zero exported files.
+Two known causes:
 
-Both the local and Docker Calibre backends now always pass `--single-dir` to force a flat export layout. If you see this error on an older install, upgrade to the latest version.
+**Wrong book ID** — confirm the ID with `libris revert-import --search`.
+
+**Missing `--single-dir` flag** — without it, calibredb creates per-book subdirectories inside the export destination; in certain conditions no files appear at the top level with rc=0. Fixed in v0.3.4b0.
+
+**Unsupported export format** — calibredb exports the book successfully but the file filter didn't recognise the extension (e.g. `.txt`, `.azw`, `.lit`, `.fb2`, `.rtf`, `.doc`, `.docx`). Fixed in v0.3.6b0: `_BOOK_EXTENSIONS` is now derived directly from the same extension sets the classifier uses, so all recognised formats are covered.
 
 ---
 

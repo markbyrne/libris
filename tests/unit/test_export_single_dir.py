@@ -233,3 +233,75 @@ class TestDockerExportSingleDir:
 
         assert real_file in result, "Real .epub file should be in result"
         assert subdir not in result, "Directory should not be in result"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _BOOK_EXTENSIONS derived from classifier (covers txt + all formats)
+# ---------------------------------------------------------------------------
+
+class TestBookExtensionsCoverage:
+    """_BOOK_EXTENSIONS must cover every format the classifier recognises so that
+    export_book never silently drops a valid exported file.
+
+    Root cause of the original bug: _BOOK_EXTENSIONS was a hand-rolled set that
+    was missing .txt (and other formats like .azw, .lit, .fb2, .rtf, .doc etc.).
+    When calibredb exported a TXT-format book the file was written but the rglob
+    filter silently dropped it, producing the 'export returned no files' warning.
+    """
+
+    def _make_local(self, library_path: Path):
+        from libris.calibre.local import LocalCalibre  # noqa: PLC0415
+        inst = LocalCalibre.__new__(LocalCalibre)
+        inst._library = library_path
+        inst._book_files = library_path
+        return inst
+
+    def test_txt_file_returned(self, tmp_path):
+        """.txt exported file is included in the result (the reported bug)."""
+        local = self._make_local(tmp_path / "library")
+        dest = tmp_path / "export"
+        dest.mkdir()
+        txt_file = dest / "MyBook.txt"
+        txt_file.write_bytes(b"plain text book")
+
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_fake_completed_process()):
+            result = local.export_book(1, dest)
+
+        assert txt_file in result, (
+            ".txt exported file should be found — it was missing from _BOOK_EXTENSIONS"
+        )
+
+    @pytest.mark.parametrize("ext", [
+        ".epub", ".mobi", ".pdf", ".azw", ".azw3", ".djvu",
+        ".cbz", ".cbr", ".lit", ".fb2", ".lrf", ".odt",
+        ".rtf", ".doc", ".docx", ".txt",
+        ".m4b", ".mp3", ".m4a", ".flac",
+    ])
+    def test_all_classifier_extensions_returned(self, tmp_path, ext):
+        """Every extension the classifier knows about is returned by export_book."""
+        local = self._make_local(tmp_path / "library")
+        dest = tmp_path / "export"
+        dest.mkdir()
+        book_file = dest / f"Book{ext}"
+        book_file.write_bytes(b"content")
+
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_fake_completed_process()):
+            result = local.export_book(1, dest)
+
+        assert book_file in result, (
+            f"{ext} exported file should be found — check _BOOK_EXTENSIONS includes it"
+        )
+
+    def test_book_extensions_superset_of_classifier(self):
+        """_BOOK_EXTENSIONS is a superset of EBOOK_EXTENSIONS ∪ AUDIO_EXTENSIONS."""
+        from libris.calibre.local import _BOOK_EXTENSIONS  # noqa: PLC0415
+        from libris.classifier import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS  # noqa: PLC0415
+
+        expected = frozenset(f".{e}" for e in (*EBOOK_EXTENSIONS, *AUDIO_EXTENSIONS))
+        missing = expected - _BOOK_EXTENSIONS
+        assert not missing, (
+            f"_BOOK_EXTENSIONS is missing extensions known to the classifier: {missing}. "
+            "Export detection will silently drop books in those formats."
+        )
