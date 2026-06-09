@@ -668,36 +668,65 @@ class Pipeline:
                 self._store.upsert(r)
 
     def _process_audiobook_folder(self, folder: Path, record: FileRecord) -> FileRecord:
-        """Dispatch files in a dropped directory through the normal per-file pipeline.
+        """Recursively extract and dispatch all book files from a dropped directory.
 
-        Rather than blindly concatenating everything, each *direct-child* audio
-        file is routed through the existing single-file path:
+        Walk the entire directory tree and collect every audio and ebook file,
+        regardless of nesting depth.  Audio files are grouped by the directory
+        that directly contains them:
 
-        - No part marker  → direct metadata lookup + Calibre import
-        - Part marker     → PENDING_PARTS grouping; auto-combine fires when
-                            the complete set for that group is staged
+        - **One audio file** in a directory → dispatched as a standalone audiobook
+          through the normal single-file pipeline (metadata lookup, Calibre import).
+        - **Multiple audio files** in the same directory → treated as parts of one
+          audiobook and handed to :meth:`import_directory_combined`, which assigns
+          sequential part numbers and auto-combines when all parts are staged.
+        - **Ebook files** at any depth → each dispatched individually through the
+          normal ebook pipeline regardless of how many share a directory.
 
-        This correctly handles a "library drop" directory that mixes standalone
-        books, multi-part books, and multiple series — e.g.:
+        After all files have been extracted the original directory tree is removed.
+
+        Example — dropping a "Christopher Paolini" folder::
 
             Christopher Paolini/
-              Eragon.m4b                          → single import
-              Eldest.m4b                          → single import
-              Brisingr (part 1 of 3).m4b  ┐
-              Brisingr (part 2 of 3).m4b  ├─ grouped → combined → import
-              Brisingr (part 3 of 3).m4b  ┘
-              Inheritance (part 1 of 3).m4b  ┐
-              Inheritance (part 2 of 3).m4b  ├─ separate group → combined
-              Inheritance (part 3 of 3).m4b  ┘
+              Eragon.m4b                         → standalone audiobook import
+              Eldest/
+                Eldest.m4b                       → standalone audiobook import
+              Brisingr/
+                Brisingr - Part 1.m4b  ┐
+                Brisingr - Part 2.m4b  ├─ import_directory_combined → 1 M4B
+                Brisingr - Part 3.m4b  ┘
+              Inheritance Cycle/
+                Inheritance - Part 1.m4b  ┐
+                Inheritance - Part 2.m4b  ├─ separate group → combined
+                Inheritance - Part 3.m4b  ┘
+              Eragon.epub                        → ebook import (alongside audiobook)
         """
-        # Only scan direct children — nested subdirectories are not supported.
-        audio_files = audio_conv.find_audio_files(folder, recursive=False)
-        ebook_files = [
-            f for f in sorted(folder.iterdir())
-            if f.is_file() and f.suffix.lstrip(".").lower() in EBOOK_EXTENSIONS
-        ]
+        import os
+        from collections import defaultdict
 
-        if not audio_files and not ebook_files:
+        # ── Walk the full tree ────────────────────────────────────────
+        # audio_by_dir maps each directory to the audio files directly in it.
+        # ebook_files collects every ebook file found anywhere in the tree.
+        audio_by_dir: dict[Path, list[Path]] = defaultdict(list)
+        ebook_files: list[Path] = []
+
+        for root, dirs, files in os.walk(str(folder)):
+            # Deterministic traversal order; skip hidden directories.
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            root_path = Path(root)
+            for fname in sorted(files):
+                if fname.startswith("."):
+                    continue
+                p = root_path / fname
+                suffix = p.suffix.lstrip(".").lower()
+                if suffix in audio_conv.AUDIO_EXTENSIONS:
+                    audio_by_dir[root_path].append(p)
+                elif suffix in EBOOK_EXTENSIONS:
+                    ebook_files.append(p)
+
+        total_audio = sum(len(v) for v in audio_by_dir.values())
+        audio_groups = len(audio_by_dir)
+
+        if total_audio == 0 and not ebook_files:
             from .exceptions import ConversionError
             raise ConversionError(f"No supported files found in {folder}")
 
@@ -705,45 +734,62 @@ class Pipeline:
             "pipeline.folder_dispatch",
             extra={
                 "folder": folder.name,
-                "audio": len(audio_files),
+                "audio": total_audio,
+                "audio_groups": audio_groups,
                 "ebooks": len(ebook_files),
             },
         )
 
         last_record = record
 
-        # ── Audio files ───────────────────────────────────────────────
-        for audio_file in audio_files:
-            file_record = self._get_or_create_record(audio_file, "audiobook")
+        # ── Audio groups ──────────────────────────────────────────────
+        for dir_path in sorted(audio_by_dir):
+            group = audio_by_dir[dir_path]  # already sorted by filename from walk
 
-            if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
-                # If the file is still at its original path the previous run
-                # didn't clean it up — reset and re-process rather than skip.
-                if Path(file_record.original_path).resolve() == audio_file.resolve():
-                    log.info("pipeline.audio.folder_reprocess", extra={"file": audio_file.name})
-                    file_record.state = FileState.INCOMING
-                    self._store.upsert(file_record)
-                else:
-                    log.info(
-                        "pipeline.audio.folder_skip",
-                        extra={"file": audio_file.name, "state": file_record.state.value},
-                    )
-                    continue
-            if (file_record.state == FileState.PENDING_PARTS
-                    and Path(file_record.current_path).exists()):
-                continue  # already staged, waiting for sibling parts
+            if len(group) == 1:
+                # ── Single file in this directory → standalone audiobook ──
+                audio_file = group[0]
+                file_record = self._get_or_create_record(audio_file, "audiobook")
 
-            file_record.state = FileState.PROCESSING
-            self._store.upsert(file_record)
+                if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
+                    if Path(file_record.original_path).resolve() == audio_file.resolve():
+                        log.info("pipeline.audio.folder_reprocess",
+                                 extra={"file": audio_file.name})
+                        file_record.state = FileState.INCOMING
+                        self._store.upsert(file_record)
+                    else:
+                        log.info("pipeline.audio.folder_skip",
+                                 extra={"file": audio_file.name,
+                                        "state": file_record.state.value})
+                        continue
 
-            try:
-                last_record = self._process_audiobook(audio_file, file_record)
-            except BookPipelineError as exc:
-                log.exception(
-                    "pipeline.audio.folder_file_failed",
-                    extra={"file": str(audio_file)},
+                if (file_record.state == FileState.PENDING_PARTS
+                        and Path(file_record.current_path).exists()):
+                    continue  # already staged, awaiting sibling parts
+
+                file_record.state = FileState.PROCESSING
+                self._store.upsert(file_record)
+                try:
+                    last_record = self._process_audiobook(audio_file, file_record)
+                except BookPipelineError as exc:
+                    log.exception("pipeline.audio.folder_file_failed",
+                                  extra={"file": str(audio_file)})
+                    last_record = self._mark_failed(file_record, exc)
+
+            else:
+                # ── Multiple files in this directory → treat as parts ──
+                # import_directory_combined assigns sequential part numbers
+                # (1 … N, sorted by filename) and auto-combines when all parts
+                # are staged.  Idempotent: already-staged parts are skipped.
+                log.info(
+                    "pipeline.audio.folder_parts_group",
+                    extra={"dir": dir_path.name, "count": len(group)},
                 )
-                last_record = self._mark_failed(file_record, exc)
+                try:
+                    last_record = self.import_directory_combined(dir_path)
+                except (BookPipelineError, ValueError) as exc:
+                    log.exception("pipeline.audio.folder_parts_failed",
+                                  extra={"dir": str(dir_path)})
 
         # ── Ebook files ───────────────────────────────────────────────
         for ebook_file in ebook_files:
@@ -751,43 +797,38 @@ class Pipeline:
 
             if file_record.state in (FileState.IMPORTED, FileState.PROCESSING):
                 if Path(file_record.original_path).resolve() == ebook_file.resolve():
-                    log.info("pipeline.ebook.folder_reprocess", extra={"file": ebook_file.name})
+                    log.info("pipeline.ebook.folder_reprocess",
+                             extra={"file": ebook_file.name})
                     file_record.state = FileState.INCOMING
                     self._store.upsert(file_record)
                 else:
-                    log.info(
-                        "pipeline.ebook.folder_skip",
-                        extra={"file": ebook_file.name, "state": file_record.state.value},
-                    )
+                    log.info("pipeline.ebook.folder_skip",
+                             extra={"file": ebook_file.name,
+                                    "state": file_record.state.value})
                     continue
 
             file_record.state = FileState.PROCESSING
             self._store.upsert(file_record)
-
             try:
                 last_record = self._process_ebook(ebook_file, file_record)
             except BookPipelineError as exc:
-                log.exception(
-                    "pipeline.ebook.folder_file_failed",
-                    extra={"file": str(ebook_file)},
-                )
+                log.exception("pipeline.ebook.folder_file_failed",
+                              extra={"file": str(ebook_file)})
                 last_record = self._mark_failed(file_record, exc)
 
-        # All book files have been moved out of the folder by their individual
-        # processing steps (to staging, review, failed, or Calibre).  Remove
-        # whatever remains (.DS_Store, cover art, NFO, etc.) so incoming/ stays
-        # clean.  shutil.rmtree handles non-empty directories that rmdir cannot.
+        # ── Cleanup ───────────────────────────────────────────────────
+        # All book files have been moved out by their processing steps.
+        # Remove whatever remains (.DS_Store, cover art, NFO, etc.).
         shutil.rmtree(folder, ignore_errors=True)
         if not folder.exists():
             log.info("pipeline.folder_cleaned", extra={"folder": str(folder)})
         else:
             log.warning("pipeline.folder_cleanup_failed", extra={"folder": str(folder)})
 
-        # Mark the directory's own record as a processed container so the
-        # periodic scan never re-dispatches it.
         record.state = FileState.IMPORTED
         record.error_msg = (
-            f"Directory: dispatched {len(audio_files)} audio, {len(ebook_files)} ebook file(s)"
+            f"Directory: extracted {total_audio} audio "
+            f"({audio_groups} group(s)), {len(ebook_files)} ebook file(s)"
         )
         self._store.upsert(record)
 
@@ -938,14 +979,10 @@ class Pipeline:
                         native format as-is.
         """
         if path.is_dir():
-            # Ebook directories are not supported — we don't know which file
-            # to use or how to merge them.  Fail clearly rather than crashing
-            # inside ebook-convert.
-            from .exceptions import BookPipelineError
-            raise BookPipelineError(
-                f"Cannot process an ebook directory: {path.name}. "
-                "Place individual ebook files in incoming/ directly."
-            )
+            # Ebook-only directory (no audio files — classifier routed it here).
+            # Delegate to the same recursive dispatcher used for audiobook folders
+            # so ebook files at any depth are extracted and processed individually.
+            return self._process_audiobook_folder(path, record)
 
         ext = path.suffix.lstrip(".").lower()
         preferred = self.config.output.preferred_ebook_format   # "epub" | "mobi"
