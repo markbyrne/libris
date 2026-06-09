@@ -15,6 +15,7 @@ Commands:
   libris remove          — Permanently delete failed file(s) and their DB records
   libris prune           — Remove DB records for files manually deleted from disk
   libris list-pending    — Show multi-part audiobooks waiting for sibling parts
+  libris pair-pending    — Merge two pending groups into one
   libris pending-discard — Move a pending part group back to review/
   libris combine-parts   — Force-combine a pending part group and import
   libris revert-import   — Remove a book from Calibre and return it to review/
@@ -1752,6 +1753,7 @@ def list_pending(config_path: Optional[Path]) -> None:
     click.echo("  Force-combine:  libris combine-parts --id <N>")
     click.echo("  Combine all:    libris combine-parts --all")
     click.echo("  Discard group:  libris pending-discard --id <N>")
+    click.echo("  Merge groups:   libris pair-pending --id1 <N> --id2 <M>")
     click.echo()
 
 
@@ -1977,6 +1979,106 @@ def mark_as_part(
         click.echo(click.style(
             "       No total given — run 'libris combine-parts' when all parts are staged.",
             dim=True,
+        ))
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
+# pair-pending — merge two pending groups into one
+# ---------------------------------------------------------------------------
+
+@main.command("pair-pending")
+@click.option("--id1", required=True, type=int,
+              help="Primary group position (group 2 is merged into this one)")
+@click.option("--id2", required=True, type=int,
+              help="Secondary group position (its parts are moved to group 1)")
+@_CONFIG_OPTION
+def pair_pending(id1: int, id2: int, config_path: Optional[Path]) -> None:
+    """Merge two pending groups so their parts are combined together.
+
+    Group 2 is absorbed into group 1: all parts are re-sequenced in order,
+    and total_parts is updated.  If the merged group is now complete, it is
+    automatically combined and imported.
+
+    \b
+      libris list-pending                  # find the two group IDs
+      libris pair-pending --id1 1 --id2 2  # merge group [2] into group [1]
+    """
+    if id1 == id2:
+        _die("--id1 and --id2 must refer to different groups.")
+
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+    store = _open_store(config.paths.state_db)
+
+    groups = store.list_pending_groups()
+    if not groups:
+        store.close()
+        click.echo("\n  No pending groups.\n")
+        return
+
+    group_list = list(groups.items())
+    n = len(group_list)
+    if id1 < 1 or id1 > n or id2 < 1 or id2 > n:
+        store.close()
+        _die(
+            f"ID out of range — {n} pending group(s).\n"
+            "  Run 'libris list-pending' to see current IDs."
+        )
+
+    key1, records1 = group_list[id1 - 1]
+    key2, records2 = group_list[id2 - 1]
+
+    # Merge: combine both record lists and assign sequential part_nums
+    combined = sorted(records1 + records2, key=lambda r: (r.part_num or 0, r.original_path))
+    new_total = len(combined)
+
+    click.echo()
+    click.echo(
+        f"  Merging [{id2}] {click.style(key2, bold=True)}"
+        f" into [{id1}] {click.style(key1, bold=True)}"
+    )
+    click.echo()
+
+    for new_part_num, record in enumerate(combined, 1):
+        record.part_group_key = key1
+        record.part_num = new_part_num
+        record.total_parts = new_total
+        store.upsert(record)
+        click.echo(f"  part {new_part_num}  {Path(record.current_path).name}")
+
+    store.close()
+    click.echo()
+    click.echo(f"  Merged into group '{key1}' with {new_total} parts.")
+    click.echo()
+
+    # Auto-trigger combine if all files exist on disk
+    live = [r for r in combined if Path(r.current_path).exists()]
+    if len(live) == new_total:
+        click.echo("  All parts present — triggering combine + import…")
+        click.echo()
+        pipeline = Pipeline(config)
+        try:
+            result_record = pipeline._combine_pending_group(key1, combined)
+            if result_record.state == FileState.IMPORTED:
+                click.echo(click.style(
+                    f"  ✅  {result_record.matched_title or key1}", fg="green"
+                ))
+                if result_record.matched_author:
+                    click.echo(f"       Author:  {result_record.matched_author}")
+                click.echo(f"       Score:   {result_record.confidence:.2f}")
+            else:
+                click.echo(f"  🔍  {result_record.matched_title or key1} → review/")
+                click.echo("       Run 'libris rematch' to find the correct match.")
+        except Exception as exc:
+            click.echo(click.style(f"  ❌  {key1}: {exc}", fg="red"), err=True)
+            sys.exit(1)
+    else:
+        missing = new_total - len(live)
+        click.echo(click.style(
+            f"  ⚠   {missing} part(s) still missing — run 'libris combine-parts --id <N>' when ready.",
+            fg="yellow",
         ))
     click.echo()
 
