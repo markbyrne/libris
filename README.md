@@ -719,7 +719,7 @@ libris recover --id 1
 libris recover --all
 ```
 
-After recovery, files appear in `libris list-review` and can be fixed with `libris rematch`.
+After recovery, files appear in `libris list-review` and can be fixed with `libris rematch`. The updated failed queue is reprinted automatically so you can see what still needs attention.
 
 #### Deleting unrecoverable files
 
@@ -755,7 +755,20 @@ libris remove --all
 libris remove --chaff
 ```
 
-Each deleted filename is echoed so you have a record of what was removed. A summary count is printed at the end.
+Each deleted filename is echoed so you have a record of what was removed. A summary count is printed at the end, followed by the updated failed queue so you can see what still needs attention.
+
+---
+
+### `prune` — remove stale database records
+
+When files are deleted manually from `failed/` or `staging/pending/` (outside of Libris), the database still holds records for them. `prune` finds and removes those orphaned entries.
+
+```bash
+libris prune --dry-run   # preview what would be removed
+libris prune             # apply
+```
+
+Both FAILED and PENDING_PARTS records are scanned. Only records whose `current_path` no longer exists on disk are removed.
 
 ---
 
@@ -785,10 +798,29 @@ libris list-pending
   ──────────────────────────────────────────────────
   Force-combine:  libris combine-parts --id <N>
   Combine all:    libris combine-parts --all
+  Discard group:  libris pending-discard --id <N>
   Merge groups:   libris pair-pending --id1 <N> --id2 <M>
 ```
 
 If a group times out before all parts arrive, the received parts are moved to `review/` with a note. They remain importable via `combine-parts`.
+
+---
+
+### `pending-discard` — move a pending group back to review
+
+If files were incorrectly grouped as multi-part or you want to restart the process, `pending-discard` moves every file in the group back to `review/` as individual items.
+
+Part markers are stripped from the filenames on the way out so they look clean in the review queue.
+
+```bash
+# Find the group ID
+libris list-pending
+
+# Move group [1] back to review/
+libris pending-discard --id 1
+```
+
+After discarding, files appear in `libris list-review` and can be rematched or manually re-grouped with `mark-as-part`.
 
 ---
 
