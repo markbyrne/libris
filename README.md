@@ -1410,6 +1410,14 @@ Files already imported into Calibre are unaffected. Files in `review/` and `fail
 
 ---
 
+### `revert-import` reports "calibredb export returned no files"
+
+This could mean the book ID is wrong, but if the ID is correct and the book appears in `libris revert-import --search`, the cause was a missing `--single-dir` flag on the `calibredb export` command. Without it, calibredb creates per-book subdirectories inside the export destination — in certain conditions no files appear at the top level (rc=0, silent) and Libris reports zero exported files.
+
+Both the local and Docker Calibre backends now always pass `--single-dir` to force a flat export layout. If you see this error on an older install, upgrade to the latest version.
+
+---
+
 ### `import-one` says "refusing to import symlink"
 
 Libris rejects symlinks in the incoming directory as a security measure — a symlink could point to arbitrary files on the host. Copy the actual file instead of symlinking it.

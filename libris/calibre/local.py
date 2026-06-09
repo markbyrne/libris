@@ -252,6 +252,8 @@ class LocalCalibre(CalibreBackend):
             "--to-dir", str(dest_dir),
             "--dont-save-cover",
             "--dont-write-opf",
+            "--single-dir",          # force flat output — without this calibredb creates
+                                     # per-book subdirectories and may write 0 files to dest_dir
             "--template", "{title}",
             str(book_id),
             "--with-library", str(self._library),
@@ -262,7 +264,7 @@ class LocalCalibre(CalibreBackend):
             raise CalibreImportError(
                 f"calibredb export failed (rc={result.returncode}): {result.stderr.strip()}"
             )
-        exported = [f for f in dest_dir.rglob("*") if f.suffix.lower() in _BOOK_EXTENSIONS]
+        exported = [f for f in dest_dir.rglob("*") if f.is_file() and f.suffix.lower() in _BOOK_EXTENSIONS]
         log.info("calibre.local.exported", extra={"book_id": book_id, "files": [str(f) for f in exported]})
         return exported
 
