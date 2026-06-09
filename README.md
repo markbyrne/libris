@@ -514,15 +514,17 @@ libris review-accept "/books/review/Caliban and the Witch.epub"
 
 #### Format merging
 
-If a file arrives that matches a book already in Calibre **but in a different format**, it is automatically added as a new format to the existing record — no review, no duplicate warning. A single Calibre book record will then hold both files. The existing record's cover and metadata are also refreshed with the freshly resolved API data.
+If a file arrives that matches a book already in Calibre **but in a different ebook format**, it is automatically added as a new format to the existing record — no review, no duplicate warning. A single Calibre book record will then hold both files. The existing record's cover and metadata are also refreshed with the freshly resolved API data.
 
 ```
-incoming/ Eragon.epub   →  finds Eragon.m4b already in Calibre
+incoming/ Eragon.epub   →  finds Eragon.mobi already in Calibre
                         →  calibredb add_format 42 Eragon.epub  ✅
-                        →  Calibre book 42 now has: EPUB + M4B
+                        →  Calibre book 42 now has: EPUB + MOBI
 ```
 
 This applies whether the files arrive in the same directory drop or at different times, and regardless of `duplicate_action` — format merging always runs.
+
+> **Ebook + audiobook of the same title** — When an M4B audiobook arrives and an EPUB of the same title already exists, Libris creates a **separate Calibre entry** for the audiobook rather than trying to merge them. `calibredb add_format` does not support audio formats, and ebook/audiobook records are better kept distinct in the library.
 
 #### Duplicates stay in the review queue
 
