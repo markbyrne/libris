@@ -1390,8 +1390,9 @@ def recover(
             record.error_msg = "Deleted by user from failed queue"
             store.upsert(record)
             click.echo(f"  🗑   {name}")
+        remaining = store.list_by_state(FileState.FAILED)
         store.close()
-        click.echo()
+        _render_failed_list(remaining)
         return
 
     # ── Determine targets for recovery ────────────────────────────────────
@@ -1435,11 +1436,15 @@ def recover(
         click.echo(f"       → review/{dest.name}")
         click.echo()
 
+    remaining = store.list_by_state(FileState.FAILED)
     store.close()
     click.echo(_hr())
     click.echo("  Run 'libris list-review' to confirm.")
     click.echo("  Run 'libris rematch --id <N>' to fix the metadata match.")
     click.echo()
+    if remaining:
+        click.echo("  Updated failed queue:")
+        _render_failed_list(remaining)
     sys.exit(1 if any_failed else 0)
 
 
@@ -1465,21 +1470,12 @@ def _age_str(created_at) -> str:
     return f"{mins}m"
 
 
-@main.command("list-failed")
-@_CONFIG_OPTION
-def list_failed(config_path: Optional[Path]) -> None:
-    """Show all files currently in FAILED state.
+def _render_failed_list(records: list) -> None:
+    """Render the failed queue in the standard list-failed format.
 
-    Displays each file, its error message, and how long it has been there.
-    Use 'libris recover' to move files back to review/, or
-    'libris remove' to permanently delete them.
+    Shared by list-failed, remove, and recover so they all show the same
+    updated view after completing their action.
     """
-    path = _resolve_config(config_path)
-    config = load_config(path)
-    store = _open_store(config.paths.state_db)
-    records = store.list_by_state(FileState.FAILED)
-    store.close()
-
     click.echo()
     if not records:
         click.echo("  No files in failed state.")
@@ -1518,6 +1514,23 @@ def list_failed(config_path: Optional[Path]) -> None:
             fg="yellow",
         ))
     click.echo()
+
+
+@main.command("list-failed")
+@_CONFIG_OPTION
+def list_failed(config_path: Optional[Path]) -> None:
+    """Show all files currently in FAILED state.
+
+    Displays each file, its error message, and how long it has been there.
+    Use 'libris recover' to move files back to review/, or
+    'libris remove' to permanently delete them.
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    store = _open_store(config.paths.state_db)
+    records = store.list_by_state(FileState.FAILED)
+    store.close()
+    _render_failed_list(records)
 
 
 # ---------------------------------------------------------------------------
@@ -1595,10 +1608,11 @@ def remove(
         click.echo(f"  🗑   {name}")
         n_removed += 1
 
+    remaining = store.list_by_state(FileState.FAILED)
     store.close()
     click.echo()
     click.echo(f"  {n_removed} file(s) removed.")
-    click.echo()
+    _render_failed_list(remaining)
 
 
 # ---------------------------------------------------------------------------
