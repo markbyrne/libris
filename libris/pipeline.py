@@ -214,36 +214,49 @@ class Pipeline:
                         existing_formats = set()
 
                     if incoming_fmt not in existing_formats:
-                        # Different format: merge into existing record + update metadata
-                        try:
-                            self._calibre.add_format(dup_ids[0], path)
-                            path.unlink(missing_ok=True)
-                            if self.config.output.embed_cover_art and result.cover_path:
-                                self._calibre.set_cover(dup_ids[0], result.cover_path)
-                            self._calibre.set_metadata(dup_ids[0], result)
-                            if result.cover_path:
-                                result.cover_path.unlink(missing_ok=True)
-                            record.state = FileState.IMPORTED
-                            record.calibre_book_id = dup_ids[0]
-                            record.error_msg = (
-                                f"Added {incoming_fmt.upper()} format to "
-                                f"Calibre book {dup_ids[0]}"
-                            )
-                            self._store.upsert(record)
-                            log.info(
-                                "pipeline.force_import_format_merged",
+                        # Different format: merge into existing record + update metadata.
+                        # Audio formats (M4B, MP3, …) are not supported by
+                        # calibredb add_format — skip straight to add_book so the
+                        # audiobook gets its own separate Calibre entry.
+                        _is_audio = incoming_fmt in audio_conv.AUDIO_EXTENSIONS
+                        if incoming_fmt and not _is_audio:
+                            try:
+                                self._calibre.add_format(dup_ids[0], path)
+                                path.unlink(missing_ok=True)
+                                if self.config.output.embed_cover_art and result.cover_path:
+                                    self._calibre.set_cover(dup_ids[0], result.cover_path)
+                                self._calibre.set_metadata(dup_ids[0], result)
+                                if result.cover_path:
+                                    result.cover_path.unlink(missing_ok=True)
+                                record.state = FileState.IMPORTED
+                                record.calibre_book_id = dup_ids[0]
+                                record.error_msg = (
+                                    f"Added {incoming_fmt.upper()} format to "
+                                    f"Calibre book {dup_ids[0]}"
+                                )
+                                self._store.upsert(record)
+                                log.info(
+                                    "pipeline.force_import_format_merged",
+                                    extra={
+                                        "book_id": dup_ids[0],
+                                        "format": incoming_fmt,
+                                        "title": result.title,
+                                    },
+                                )
+                                return record
+                            except Exception as exc:
+                                log.warning(
+                                    "pipeline.force_import_add_format_failed: %s", exc
+                                )
+                                # fall through — add_book will create a new record
+                        else:
+                            log.debug(
+                                "pipeline.force_import_skip_add_format",
                                 extra={
-                                    "book_id": dup_ids[0],
-                                    "format": incoming_fmt,
-                                    "title": result.title,
+                                    "fmt": incoming_fmt or "(none)",
+                                    "reason": "audio format — will create separate Calibre entry",
                                 },
                             )
-                            return record
-                        except Exception as exc:
-                            log.warning(
-                                "pipeline.force_import_add_format_failed: %s", exc
-                            )
-                            # fall through — add_book will create a new record
 
                     elif self.config.metadata.duplicate_action == "import":
                         # Same format + --overwrite: replace existing format
@@ -1103,33 +1116,46 @@ class Pipeline:
             # Different format: merge into the existing record regardless of
             # duplicate_action.  Also refresh cover + metadata on the existing
             # record so it benefits from the freshly resolved API data.
-            try:
-                self._calibre.add_format(dup_ids[0], file_path)
-                file_path.unlink(missing_ok=True)
-                if self.config.output.embed_cover_art and result.cover_path:
-                    self._calibre.set_cover(dup_ids[0], result.cover_path)
-                self._calibre.set_metadata(dup_ids[0], result)
-                if result.cover_path:
-                    result.cover_path.unlink(missing_ok=True)
-                record.state = FileState.IMPORTED
-                record.calibre_book_id = dup_ids[0]
-                record.matched_title = result.title
-                record.matched_author = result.author
-                record.confidence = result.confidence
-                record.error_msg = f"Added {incoming_fmt.upper()} format to Calibre book {dup_ids[0]}"
-                self._store.upsert(record)
-                log.info(
-                    "pipeline.format_merged",
-                    extra={
-                        "title": result.title,
-                        "format": incoming_fmt,
-                        "book_id": dup_ids[0],
-                    },
+            # Audio formats are not supported by calibredb add_format — return
+            # None so the caller proceeds with add_book and creates a separate
+            # Calibre entry (e.g. EPUB already in library, M4B comes in).
+            _is_audio = incoming_fmt in audio_conv.AUDIO_EXTENSIONS
+            if incoming_fmt and not _is_audio:
+                try:
+                    self._calibre.add_format(dup_ids[0], file_path)
+                    file_path.unlink(missing_ok=True)
+                    if self.config.output.embed_cover_art and result.cover_path:
+                        self._calibre.set_cover(dup_ids[0], result.cover_path)
+                    self._calibre.set_metadata(dup_ids[0], result)
+                    if result.cover_path:
+                        result.cover_path.unlink(missing_ok=True)
+                    record.state = FileState.IMPORTED
+                    record.calibre_book_id = dup_ids[0]
+                    record.matched_title = result.title
+                    record.matched_author = result.author
+                    record.confidence = result.confidence
+                    record.error_msg = f"Added {incoming_fmt.upper()} format to Calibre book {dup_ids[0]}"
+                    self._store.upsert(record)
+                    log.info(
+                        "pipeline.format_merged",
+                        extra={
+                            "title": result.title,
+                            "format": incoming_fmt,
+                            "book_id": dup_ids[0],
+                        },
+                    )
+                    return record
+                except Exception as exc:
+                    log.warning("pipeline.add_format_failed: %s", exc)
+                    # Fall through to normal duplicate handling
+            else:
+                # Audio format or no extension: can't merge via add_format.
+                # Let the caller use add_book to create a separate Calibre entry.
+                log.debug(
+                    "pipeline.skip_add_format_audio",
+                    extra={"fmt": incoming_fmt or "(none)", "dup_id": dup_ids[0]},
                 )
-                return record
-            except Exception as exc:
-                log.warning("pipeline.add_format_failed: %s", exc)
-                # Fall through to normal duplicate handling
+                return None
 
         # ── Same format already in Calibre — apply duplicate_action ───
         id_str = ", ".join(str(i) for i in dup_ids[:3])
