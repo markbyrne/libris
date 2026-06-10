@@ -1437,13 +1437,17 @@ Two known causes:
 
 ---
 
-### Audiobook imported to wrong directory structure
+### Book imported to wrong directory structure
 
-If a book is imported to a path like `Books/Brisingr/Inheritance Cycle 3 (100)/` instead of `Books/Paolini, Christopher/Brisingr (100)/`, the M4B had stale embedded tags that Calibre used to build the directory name at `calibredb add` time.
+If a book imported to a path like `Books/Brisingr/Inheritance Cycle 3 (100)/` or `Books/Unknown/Book01-Merchant of Death (102)/` instead of `Books/{Author Sort}/{Title} (id)/`, you hit a bug fixed in v0.3.8b0.
 
-**Cause 1 — `overwrite_existing: false` (fixed v0.3.4b0):** Libris skipped re-embedding if the file already had tags, so Calibre read whatever was in the original file. Fix: Libris now always re-embeds metadata before `calibredb add`, regardless of `overwrite_existing`.
+**The real mechanism (fixed v0.3.8b0):** `calibredb add` builds the book directory by parsing the **filename** as `{title} - {author}` — it never reads embedded M4B audio tags. So `Inheritance Cycle 3 - Brisingr.m4b` became title "Inheritance Cycle 3" by author "Brisingr", and `Book01-Merchant of Death.m4b` (no ` - ` separator) became author "Unknown". Normally `calibredb set_metadata` repairs this by renaming the directory afterwards — but in split-library mode (`book_file_path` set separately) Libris had already moved the physical files to `book_file_path`, so the rename was a silent no-op and the wrong directory persisted, desynced from the database.
 
-**Cause 2 — duplicate MP4 atom conflict (fixed v0.3.7b0):** Even with overwrite enabled, `ffmpeg -c copy` appended the new metadata atoms to the existing `ilst` list rather than replacing them. Since Calibre honours the *first* occurrence of each atom, it read the original stale values (e.g. the book title placed in the `©ART` artist field by the file's original tagger). Fix: Libris now adds `-map_metadata -1` to the ffmpeg command to fully discard all inherited atoms before writing the correct values; `-map_metadata 0:c` is added afterwards to preserve chapter markers.
+Two fixes in v0.3.8b0:
+1. Libris now passes the resolved metadata to `calibredb add` via `--title`/`--authors`, so the directory is correct from the moment it is created. This covers both audiobooks and ebooks.
+2. In split-library mode, `set_metadata` now mirrors any calibredb directory rename under `book_file_path`, keeping the physical files in sync with the database for all later metadata updates.
+
+(Historical note: v0.3.4b0 and v0.3.7b0 attributed this bug to stale *embedded tags*. That explanation was wrong for the directory structure — Calibre doesn't read audio tags at add time. The embed step is still performed because the tags matter for audiobook players such as Audiobookshelf and Apple Books. v0.3.7b0's `-map_metadata 0:c` flag also caused ffmpeg to fail outright on chapterless M4Bs; v0.3.8b0 replaces it with `-map_chapters 0` and scopes the tag clear to global metadata so chapter titles survive.)
 
 If you have already-imported books at a wrong path, use `libris revert-import` to remove them and re-import, or rename the directory in your Calibre library and run `calibredb check_library` to rescan.
 

@@ -192,6 +192,7 @@ class TestForceImportAudioGuard:
         result.isbn = None
         result.best = MagicMock()
         result.best.candidate.cover_url = None
+        result.best.candidate.authors = ["Andy Weir"]
         result.cover_path = None
 
         with patch("libris.pipeline.audio_tag"), \
@@ -200,4 +201,9 @@ class TestForceImportAudioGuard:
             pipeline.force_import(m4b, result)
 
         mock_calibre.add_format.assert_not_called()
-        mock_calibre.add_book.assert_called_once_with(m4b)
+        mock_calibre.add_book.assert_called_once()
+        assert mock_calibre.add_book.call_args.args[0] == m4b
+        assert mock_calibre.add_book.call_args.kwargs == {
+            "title": "Project Hail Mary",
+            "authors": "Andy Weir",
+        }

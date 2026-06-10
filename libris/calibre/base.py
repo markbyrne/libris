@@ -5,15 +5,44 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from typing import Optional
+
 from ..metadata.base import MetadataResult
+
+
+def format_authors(authors: list[str]) -> str:
+    """Join an author list with Calibre's multi-author separator (" & ").
+
+    Never join with ", " for calibredb fields — Calibre parses "A, B" as a
+    single inverted name ("Surname, Given").
+    """
+    return " & ".join(authors)
 
 
 class CalibreBackend(ABC):
     """Interface for interacting with a Calibre library."""
 
     @abstractmethod
-    def add_book(self, file_path: Path) -> int:
+    def add_book(
+        self,
+        file_path: Path,
+        title: Optional[str] = None,
+        authors: Optional[str] = None,
+    ) -> int:
         """Import a file into the Calibre library.
+
+        title/authors are passed to calibredb add as --title/--authors and
+        determine the directory structure Calibre creates
+        ({author_sort}/{title} ({id})/).  Without them calibredb falls back
+        to parsing the FILENAME as "{title} - {author}" — it never reads
+        embedded M4B audio tags — which produces wrong directories for
+        files like "Book01-Merchant of Death.m4b" (author "Unknown").
+
+        Args:
+            file_path: Book file to import.
+            title: Resolved title, or None to let calibredb guess.
+            authors: " & "-joined author string (see format_authors), or
+                None to let calibredb guess.
 
         Returns:
             The Calibre book ID assigned to the new entry.

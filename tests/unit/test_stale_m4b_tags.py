@@ -1,24 +1,26 @@
 """Tests for stale M4B tag clearing in _build_ffmpeg_cmd.
 
-Root cause of the bug
----------------------
-When ``embed_metadata`` is called on an M4B file that already has embedded
-tags, ffmpeg with ``-c copy`` (stream-copy) appends the new ``-metadata``
-values to the existing ``moov.udta.meta.ilst`` atom list rather than
-replacing them.  Readers that honour the *first* occurrence of each atom
-(including ``calibredb add``) therefore see the stale values from the
-original file.  This caused Calibre to create the wrong directory structure,
-e.g. ``Books/Brisingr/Inheritance Cycle 3 (100)/...`` instead of
-``Books/Paolini, Christopher/Brisingr (100)/...``.
+What these flags do
+-------------------
+``-map_metadata:g -1`` discards inherited GLOBAL metadata from the source
+file so stale tags (e.g. a book title left in the artist field by the
+file's original tagger) cannot persist alongside the values we explicitly
+pass via ``-metadata key=value``.  The ``:g`` out-spec matters: a bare
+``-map_metadata -1`` also wipes per-chapter metadata, stripping chapter
+titles.  ``-map_chapters 0`` copies chapter markers so combined M4Bs keep
+their timing data.
 
-Fix
----
-Add ``-map_metadata -1`` immediately after the ``-map`` stream-selection
-flags.  This discards ALL inherited metadata from the source file so only
-the values we explicitly pass via ``-metadata key=value`` end up in the
-output.  ``-map_metadata 0:c`` is added afterwards to restore chapter marks
-from the input so combined M4Bs (which have chapter timing embedded) are
-not stripped of that information.
+Note: cleaning these tags matters for audiobook players (Audiobookshelf,
+Apple Books, Prologue) — NOT for Calibre's directory structure.
+``calibredb add`` never reads M4B audio tags; it parses the FILENAME as
+``{title} - {author}``.  The directory fix lives in add_book's
+``--title``/``--authors`` flags, not here.
+
+Regression note: an earlier version used ``-map_metadata 0:c`` to restore
+chapters.  That syntax makes ffmpeg hard-fail with "Invalid chapter index
+0" on any input WITHOUT chapters (single-file M4Bs), so every embed on
+such files raised ConversionError.  ``-map_chapters 0`` is the correct
+flag and is a no-op when the input has no chapters.
 """
 
 from __future__ import annotations
@@ -73,7 +75,7 @@ class TestMapMetadataClear:
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
 
         pairs = list(zip(cmd, cmd[1:]))
-        assert ("-map_metadata", "-1") in pairs, (
+        assert ("-map_metadata:g", "-1") in pairs, (
             "-map_metadata -1 is missing; stale ©ART / ©alb atoms will persist "
             "and calibredb will read the wrong author/title from the source file."
         )
@@ -87,7 +89,7 @@ class TestMapMetadataClear:
             len(cmd),
         )
         clear_idx = next(
-            (i for i in range(len(cmd) - 1) if cmd[i] == "-map_metadata" and cmd[i + 1] == "-1"),
+            (i for i in range(len(cmd) - 1) if cmd[i] == "-map_metadata:g" and cmd[i + 1] == "-1"),
             None,
         )
         assert clear_idx is not None, "-map_metadata -1 not found"
@@ -104,7 +106,7 @@ class TestMapMetadataClear:
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result(), cover)
 
         pairs = list(zip(cmd, cmd[1:]))
-        assert ("-map_metadata", "-1") in pairs, (
+        assert ("-map_metadata:g", "-1") in pairs, (
             "-map_metadata -1 missing in cover-art variant of the command."
         )
 
@@ -114,35 +116,50 @@ class TestMapMetadataClear:
 # ---------------------------------------------------------------------------
 
 class TestChapterPreservation:
-    """-map_metadata 0:c must appear to restore chapter markers after the clear."""
+    """-map_chapters 0 must appear to copy chapter markers after the clear."""
 
     def test_chapter_copy_present(self, tmp_path):
-        """-map_metadata 0:c appears to copy chapters from input."""
+        """-map_chapters 0 appears to copy chapters from input."""
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
 
         pairs = list(zip(cmd, cmd[1:]))
-        assert ("-map_metadata", "0:c") in pairs, (
-            "-map_metadata 0:c is missing; combined M4Bs will lose embedded "
+        assert ("-map_chapters", "0") in pairs, (
+            "-map_chapters 0 is missing; combined M4Bs will lose embedded "
             "chapter markers after embed_metadata is called."
         )
 
     def test_chapter_copy_after_clear(self, tmp_path):
-        """-map_metadata 0:c must come AFTER -map_metadata -1."""
+        """-map_chapters 0 must come AFTER -map_metadata -1."""
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
 
         clear_idx = next(
-            (i for i in range(len(cmd) - 1) if cmd[i] == "-map_metadata" and cmd[i + 1] == "-1"),
+            (i for i in range(len(cmd) - 1) if cmd[i] == "-map_metadata:g" and cmd[i + 1] == "-1"),
             None,
         )
         chapter_idx = next(
-            (i for i in range(len(cmd) - 1) if cmd[i] == "-map_metadata" and cmd[i + 1] == "0:c"),
+            (i for i in range(len(cmd) - 1) if cmd[i] == "-map_chapters" and cmd[i + 1] == "0"),
             None,
         )
         assert clear_idx is not None, "-map_metadata -1 not found"
-        assert chapter_idx is not None, "-map_metadata 0:c not found"
+        assert chapter_idx is not None, "-map_chapters 0 not found"
         assert clear_idx < chapter_idx, (
-            "-map_metadata 0:c must come after -map_metadata -1 so the clear "
-            "doesn't subsequently suppress the chapter restore."
+            "-map_chapters 0 must come after -map_metadata -1 in the command "
+            "for readability; both must be present."
+        )
+
+    def test_no_map_metadata_0c_present(self, tmp_path):
+        """The broken -map_metadata 0:c pair must NOT be in the command.
+
+        ffmpeg hard-fails with "Invalid chapter index 0" on chapterless
+        inputs when given -map_metadata 0:c, which made embed_metadata raise
+        ConversionError for every single-file M4B without chapters.
+        """
+        cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
+
+        pairs = list(zip(cmd, cmd[1:]))
+        assert ("-map_metadata", "0:c") not in pairs, (
+            "-map_metadata 0:c found — this breaks ffmpeg on chapterless "
+            "inputs; use -map_chapters 0 instead."
         )
 
 
@@ -214,7 +231,7 @@ class TestBrisingrScenario:
         # The presence of -map_metadata -1 guarantees no stale atoms from the
         # source file reach the output — this is the specific mechanism that
         # prevented calibredb from picking up ©ART='Brisingr' as the author.
-        assert ("-map_metadata", "-1") in pairs
+        assert ("-map_metadata:g", "-1") in pairs
 
     def test_correct_artist_written_in_brisingr_scenario(self, tmp_path):
         """artist= tag must be 'Christopher Paolini', not 'Brisingr'."""
