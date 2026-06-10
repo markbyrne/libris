@@ -1433,6 +1433,8 @@ Two known causes:
 
 **Unsupported export format** — calibredb exports the book successfully but the file filter didn't recognise the extension (e.g. `.txt`, `.azw`, `.lit`, `.fb2`, `.rtf`, `.doc`, `.docx`). Fixed in v0.3.6b0: `_BOOK_EXTENSIONS` is now derived directly from the same extension sets the classifier uses, so all recognised formats are covered.
 
+**Split-library mode (fixed v0.3.7b0)** — if `calibre.book_file_path` is set separately from `library_db_path`, Libris moves book files to `book_file_path` after import. But `calibredb export` constructs the export path relative to `library_db_path` and finds no files there (rc=0, empty result). Fixed: in split-library mode `export_book` now asks calibredb where files *should* be, remaps those paths from `library_db_path → book_file_path`, and copies the files directly. A name-based fallback scan handles books imported before this fix.
+
 ---
 
 ### Audiobook imported to wrong directory structure
