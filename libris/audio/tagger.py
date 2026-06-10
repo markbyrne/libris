@@ -90,16 +90,16 @@ def _build_ffmpeg_cmd(
     if has_cover:
         cmd += ["-map", "1:v"]
 
-    # Clear ALL inherited metadata from the source file so that stale or
-    # incorrectly-placed atoms (e.g. book title in the ©ART artist field,
-    # series name in ©alb) cannot persist alongside the new values.
-    # ffmpeg -c copy without this flag copies all existing ilst atoms and
-    # then appends our new ones; readers that honour the *first* occurrence
-    # of a duplicated atom (including calibredb) would see the stale value.
-    # -map_metadata 0:c re-enables chapter copying so combined M4Bs don't
-    # lose their chapter markers.
-    cmd += ["-map_metadata", "-1"]
-    cmd += ["-map_metadata", "0:c"]
+    # Clear inherited GLOBAL metadata (:g) so stale or incorrectly-placed
+    # atoms (e.g. book title in the ©ART artist field, series name in ©alb)
+    # cannot persist alongside the new values.  The :g out-spec is required:
+    # a bare "-map_metadata -1" also wipes per-chapter metadata, stripping
+    # chapter titles.  -map_chapters 0 explicitly copies chapter markers so
+    # combined M4Bs keep their timing data.  Do NOT use -map_metadata 0:c
+    # for chapters: ffmpeg hard-fails with "Invalid chapter index 0" on any
+    # input that has no chapters (e.g. single-file M4Bs).
+    cmd += ["-map_metadata:g", "-1"]
+    cmd += ["-map_chapters", "0"]
 
     # Core tags
     tags: dict[str, str] = {
