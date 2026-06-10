@@ -56,6 +56,7 @@ def _make_mock_result(title: str = "Brisingr", author: str = "Christopher Paolin
     result.cover_path = None
     result.best = MagicMock()
     result.best.score = 0.92
+    result.best.candidate.authors = [author]
     return result
 
 
@@ -145,7 +146,9 @@ class TestEmbedAlwaysOverwritesBeforeImport:
         def fake_embed(path, res, overwrite=True, **kwargs):
             call_order.append("embed")
 
-        pipeline._calibre.add_book.side_effect = lambda p: (call_order.append("add_book"), 42)[1]
+        pipeline._calibre.add_book.side_effect = (
+            lambda p, **kw: (call_order.append("add_book"), 42)[1]
+        )
 
         with patch("libris.pipeline.resolve_metadata", return_value=mock_result):
             with patch("libris.pipeline.audio_tag.embed_metadata", side_effect=fake_embed):
@@ -237,7 +240,14 @@ class TestDirectoryStructureFromMetadata:
                 with patch.object(pipeline, "_handle_duplicate", return_value=None):
                     pipeline._resolve_tag_and_import_audio(m4b, record, m4b)
 
-        pipeline._calibre.add_book.assert_called_once_with(m4b)
+        pipeline._calibre.add_book.assert_called_once()
+        assert pipeline._calibre.add_book.call_args.args[0] == m4b
+        # The resolved title/authors must ride along — they determine the
+        # directory structure calibredb creates.
+        assert pipeline._calibre.add_book.call_args.kwargs == {
+            "title": "Brisingr",
+            "authors": "Christopher Paolini",
+        }
 
     def test_set_metadata_called_with_book_id_from_add_book(self, tmp_path):
         """set_metadata is invoked with the book_id returned by add_book."""

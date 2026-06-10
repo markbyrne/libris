@@ -40,15 +40,26 @@ class DockerCalibre(CalibreBackend):
             reverse=True,
         )
 
-    def add_book(self, file_path: Path) -> int:
+    def add_book(
+        self,
+        file_path: Path,
+        title: str | None = None,
+        authors: str | None = None,
+    ) -> int:
         container_path = self._translate(file_path)
         # Do NOT pass --automerge ignore — see LocalCalibre.add_book for the
         # full explanation.  Libris handles duplicates before calling add_book.
+        # --title/--authors control the directory calibredb creates — see
+        # LocalCalibre.add_book.
         cmd = [
             "docker", "exec", self._container,
             "calibredb", "add",
             container_path,
         ]
+        if title:
+            cmd += ["--title", title]
+        if authors:
+            cmd += ["--authors", authors]
         log.debug("calibre.docker.add", extra={"cmd": cmd})
         result = subprocess.run(cmd, capture_output=True, text=True)
 

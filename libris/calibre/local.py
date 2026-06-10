@@ -13,7 +13,7 @@ from ..classifier import EBOOK_EXTENSIONS as _EBOOK_EXT
 from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
-from .base import CalibreBackend
+from .base import CalibreBackend, format_authors
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,12 @@ class LocalCalibre(CalibreBackend):
         # "Separate Book Files from Library" feature (Issue #18).
         self._book_files: Path = config.effective_book_path or config.library_db_path
 
-    def add_book(self, file_path: Path) -> int:
+    def add_book(
+        self,
+        file_path: Path,
+        title: str | None = None,
+        authors: str | None = None,
+    ) -> int:
         # Do NOT pass --automerge ignore.  When calibredb's automerge detects
         # a "similar" book and ignores the add, it returns rc=0 with no
         # "Added book ids: N" in stdout.  The fallback integer-extraction in
@@ -55,6 +60,15 @@ class LocalCalibre(CalibreBackend):
             str(file_path),
             "--with-library", str(self._library),
         ]
+        # --title/--authors determine the directory calibredb creates.
+        # Without them calibredb parses the filename as "{title} - {author}"
+        # (it never reads embedded M4B audio tags) and the later set_metadata
+        # rename is a no-op in split-library mode because the files have
+        # already been relocated.
+        if title:
+            cmd += ["--title", title]
+        if authors:
+            cmd += ["--authors", authors]
         log.debug("calibre.local.add", extra={"cmd": cmd})
         result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -470,9 +484,7 @@ def _metadata_flags(result: MetadataResult) -> list[list[str]]:
     if result.title:
         flags.append(["--field", f"title:{result.title}"])
     if result.best and result.best.candidate.authors:
-        # Calibre uses " & " to separate multiple authors
-        authors_str = " & ".join(result.best.candidate.authors)
-        flags.append(["--field", f"authors:{authors_str}"])
+        flags.append(["--field", f"authors:{format_authors(result.best.candidate.authors)}"])
     if result.publisher:
         flags.append(["--field", f"publisher:{result.publisher}"])
     if result.description:

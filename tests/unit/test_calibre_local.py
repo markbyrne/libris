@@ -346,3 +346,127 @@ class TestSetCoverRelocates:
             with patch.object(backend, "_relocate_cover") as mock_reloc:
                 backend.set_cover(1, cover_in)
                 mock_reloc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# add_book --title/--authors flags
+# ---------------------------------------------------------------------------
+
+class TestAddBookMetadataFlags:
+    """add_book must pass --title/--authors to calibredb add when provided.
+
+    These flags determine the directory calibredb creates
+    ({author_sort}/{title} ({id})/).  Without them calibredb parses the
+    FILENAME as "{title} - {author}" — it never reads embedded M4B audio
+    tags — so "Book01-Merchant of Death.m4b" landed in
+    Books/Unknown/Book01-Merchant of Death (102)/.
+    """
+
+    def test_title_and_authors_in_command(self, tmp_path):
+        library = tmp_path / "calibre"
+        library.mkdir()
+        epub = tmp_path / "Book01-Merchant of Death.m4b"
+        epub.write_bytes(b"audio")
+        backend = _make_backend(library)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = _patch_run("Added book ids: 102\n")
+            backend.add_book(
+                epub,
+                title="Pendragon: The Merchant Of Death",
+                authors="D.J. MacHale",
+            )
+
+        cmd = mock_run.call_args_list[0].args[0]
+        assert "--title" in cmd
+        assert cmd[cmd.index("--title") + 1] == "Pendragon: The Merchant Of Death"
+        assert "--authors" in cmd
+        assert cmd[cmd.index("--authors") + 1] == "D.J. MacHale"
+
+    def test_flags_omitted_when_none(self, tmp_path):
+        """No --title/--authors flags when not provided (back-compat)."""
+        library = tmp_path / "calibre"
+        library.mkdir()
+        epub = tmp_path / "book.epub"
+        epub.write_bytes(b"epub")
+        backend = _make_backend(library)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = _patch_run("Added book ids: 1\n")
+            backend.add_book(epub)
+
+        cmd = mock_run.call_args_list[0].args[0]
+        assert "--title" not in cmd
+        assert "--authors" not in cmd
+
+    def test_flags_omitted_when_empty_string(self, tmp_path):
+        """Empty strings are treated like None — flags omitted."""
+        library = tmp_path / "calibre"
+        library.mkdir()
+        epub = tmp_path / "book.epub"
+        epub.write_bytes(b"epub")
+        backend = _make_backend(library)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = _patch_run("Added book ids: 1\n")
+            backend.add_book(epub, title="", authors="")
+
+        cmd = mock_run.call_args_list[0].args[0]
+        assert "--title" not in cmd
+        assert "--authors" not in cmd
+
+    def test_docker_backend_mirrors_flags(self, tmp_path):
+        """DockerCalibre.add_book passes the same flags inside docker exec."""
+        from libris.calibre.docker import DockerCalibre
+
+        backend = DockerCalibre.__new__(DockerCalibre)
+        backend._container = "calibre-web"
+        backend._path_map = []
+        epub = tmp_path / "book.m4b"
+        epub.write_bytes(b"audio")
+
+        with patch.object(DockerCalibre, "_translate", return_value="/incoming/book.m4b"):
+            with patch("libris.calibre.docker.subprocess.run") as mock_run:
+                mock_run.return_value = _patch_run("Added book ids: 7\n")
+                backend.add_book(epub, title="Brisingr", authors="Christopher Paolini")
+
+        cmd = mock_run.call_args_list[0].args[0]
+        assert "--title" in cmd
+        assert cmd[cmd.index("--title") + 1] == "Brisingr"
+        assert "--authors" in cmd
+        assert cmd[cmd.index("--authors") + 1] == "Christopher Paolini"
+
+
+# ---------------------------------------------------------------------------
+# format_authors helper
+# ---------------------------------------------------------------------------
+
+class TestFormatAuthors:
+    def test_single_author(self):
+        from libris.calibre.base import format_authors
+        assert format_authors(["D.J. MacHale"]) == "D.J. MacHale"
+
+    def test_multiple_authors_ampersand_joined(self):
+        """Calibre's multi-author separator is ' & ' — never ', ' (parsed as
+        a single inverted 'Surname, Given' name)."""
+        from libris.calibre.base import format_authors
+        assert format_authors(["Terry Pratchett", "Neil Gaiman"]) == (
+            "Terry Pratchett & Neil Gaiman"
+        )
+
+    def test_metadata_flags_uses_same_join(self):
+        """_metadata_flags authors field must match format_authors output."""
+        from libris.calibre.local import _metadata_flags
+
+        result = MagicMock()
+        result.title = "Good Omens"
+        result.best.candidate.authors = ["Terry Pratchett", "Neil Gaiman"]
+        result.publisher = None
+        result.description = None
+        result.language = None
+        result.isbn = None
+        result.series = None
+        result.series_index = None
+
+        flags = [f for pair in _metadata_flags(result) for f in pair]
+        assert "authors:Terry Pratchett & Neil Gaiman" in flags
