@@ -1437,11 +1437,13 @@ Two known causes:
 
 ### Audiobook imported to wrong directory structure
 
-If a book is imported to a path like `Books/Inheritance Cycle 3/Inheritance Cycle 3 - Brisingr (100)/` instead of `Books/Paolini, Christopher/Brisingr (100)/`, the M4B contained stale embedded tags at import time that Calibre used to build the directory name.
+If a book is imported to a path like `Books/Brisingr/Inheritance Cycle 3 (100)/` instead of `Books/Paolini, Christopher/Brisingr (100)/`, the M4B had stale embedded tags that Calibre used to build the directory name at `calibredb add` time.
 
-This happened when `metadata.overwrite_existing: false` was set and the M4B already had embedded tags (preserved from source files during multi-part combine). Libris now always re-embeds the resolved metadata into the file immediately before `calibredb add`, regardless of the `overwrite_existing` setting. The config flag still controls whether tags are overwritten during the general tagging flow — only the mandatory pre-import step is now unconditional.
+**Cause 1 — `overwrite_existing: false` (fixed v0.3.4b0):** Libris skipped re-embedding if the file already had tags, so Calibre read whatever was in the original file. Fix: Libris now always re-embeds metadata before `calibredb add`, regardless of `overwrite_existing`.
 
-If you have already-imported books with the wrong path, use `libris revert-import` to remove them and re-import, or rename the directory in your Calibre library and run `calibredb check_library` to rescan.
+**Cause 2 — duplicate MP4 atom conflict (fixed v0.3.7b0):** Even with overwrite enabled, `ffmpeg -c copy` appended the new metadata atoms to the existing `ilst` list rather than replacing them. Since Calibre honours the *first* occurrence of each atom, it read the original stale values (e.g. the book title placed in the `©ART` artist field by the file's original tagger). Fix: Libris now adds `-map_metadata -1` to the ffmpeg command to fully discard all inherited atoms before writing the correct values; `-map_metadata 0:c` is added afterwards to preserve chapter markers.
+
+If you have already-imported books at a wrong path, use `libris revert-import` to remove them and re-import, or rename the directory in your Calibre library and run `calibredb check_library` to rescan.
 
 ---
 
