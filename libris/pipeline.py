@@ -25,7 +25,7 @@ from rapidfuzz import fuzz as _fuzz
 from .audio import converter as audio_conv
 from .audio import tagger as audio_tag
 from .calibre import get_calibre
-from .calibre.base import CalibreBackend
+from .calibre.base import CalibreBackend, format_authors
 from .classifier import EBOOK_EXTENSIONS, Classifier, MediaType
 from .cleaner import clean_query, extract_part, is_chaff, strip_part_marker
 from .config import Config
@@ -95,6 +95,22 @@ def _deserialize_candidate(blob: str) -> "ScoredCandidate":
         confidence=d.get("confidence", 0.0),
         score_breakdown=d.get("score_breakdown", {}),
     )
+
+
+def _add_book_args(result: MetadataResult) -> dict[str, Optional[str]]:
+    """Resolved title/authors kwargs for CalibreBackend.add_book.
+
+    These become calibredb add's --title/--authors flags and determine the
+    directory Calibre creates.  Authors must come from the candidate list
+    joined with " & " — result.author joins with ", ", which Calibre would
+    parse as a single inverted "Surname, Given" name.
+    """
+    authors = (
+        format_authors(result.best.candidate.authors)
+        if result.best and result.best.candidate.authors
+        else None
+    )
+    return {"title": result.title or None, "authors": authors or None}
 
 
 class Pipeline:
@@ -335,7 +351,7 @@ class Pipeline:
             if media_type == MediaType.AUDIOBOOK:
                 audio_tag.embed_metadata(path, result, overwrite=True)
 
-            book_id = self._calibre.add_book(path)
+            book_id = self._calibre.add_book(path, **_add_book_args(result))
             record.calibre_book_id = book_id
             if self.config.output.embed_cover_art and result.cover_path:
                 self._calibre.set_cover(book_id, result.cover_path)
@@ -934,12 +950,11 @@ class Pipeline:
             return dup_record
 
         # ── Tag ───────────────────────────────────────────────────────
-        # Always overwrite here: Calibre reads embedded tags at add_book time
-        # to build its directory structure.  If the M4B already contains stale
-        # tags (e.g. preserved via ffmpeg stream-copy during combine_parts) and
-        # overwrite_existing is False, embed_metadata would skip — causing Calibre
-        # to create the wrong author/title directory layout.  The user config
-        # flag applies to the general tagging flow, not this pre-import step.
+        # Always overwrite here so the final library file carries the resolved
+        # metadata for audiobook players (Audiobookshelf, Apple Books).  Note:
+        # these tags do NOT affect Calibre's directory structure — calibredb
+        # never reads M4B audio tags; the directory comes from the
+        # --title/--authors flags passed to add_book below.
         audio_tag.embed_metadata(
             m4b_path,
             result,
@@ -947,7 +962,7 @@ class Pipeline:
         )
 
         # ── Import ────────────────────────────────────────────────────
-        book_id = self._calibre.add_book(m4b_path)
+        book_id = self._calibre.add_book(m4b_path, **_add_book_args(result))
         record.calibre_book_id = book_id
         log.info("pipeline.audio.imported", extra={"book_id": book_id, "title": result.title})
 
@@ -1043,7 +1058,7 @@ class Pipeline:
                 path.unlink(missing_ok=True)  # same cleanup for duplicate path
             return dup_record
 
-        book_id = self._calibre.add_book(book_path)
+        book_id = self._calibre.add_book(book_path, **_add_book_args(result))
         record.calibre_book_id = book_id
         log.info(
             "pipeline.ebook.imported",
