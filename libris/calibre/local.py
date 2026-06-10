@@ -253,6 +253,16 @@ class LocalCalibre(CalibreBackend):
 
     def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # In split-library mode calibredb always constructs the physical file path
+        # as `_library / books.path / filename`.  But _relocate_to_book_files has
+        # already moved those files to `_book_files / books.path / filename`.
+        # `calibredb export` therefore finds rc=0 but exports nothing because the
+        # files aren't where it expects them.  Bypass calibredb and copy directly
+        # from _book_files using the paths calibredb reports.
+        if self._book_files != self._library:
+            return self._export_from_book_files(book_id, dest_dir)
+
         cmd = [
             "calibredb", "export",
             "--to-dir", str(dest_dir),
@@ -272,6 +282,92 @@ class LocalCalibre(CalibreBackend):
             )
         exported = [f for f in dest_dir.rglob("*") if f.is_file() and f.suffix.lower() in _BOOK_EXTENSIONS]
         log.info("calibre.local.exported", extra={"book_id": book_id, "files": [str(f) for f in exported]})
+        return exported
+
+    def _export_from_book_files(self, book_id: int, dest_dir: Path) -> list[Path]:
+        """Copy book files from _book_files when split-library mode is active.
+
+        calibredb reports format paths as absolute paths under _library.  After
+        _relocate_to_book_files those files live at the same relative path under
+        _book_files instead.  This helper:
+          1. Asks calibredb where it thinks the files are (under _library).
+          2. Remaps each path from _library → _book_files.
+          3. Copies any that exist at the remapped location into dest_dir.
+
+        If the remapped path doesn't exist (e.g. an older book whose path was
+        changed by set_metadata before this fix was applied), the helper falls
+        back to scanning _book_files for any file whose relative path suffix
+        matches what calibredb reports — a best-effort recovery for pre-fix
+        imports.
+        """
+        import json as _json  # noqa: PLC0415
+
+        cmd = [
+            "calibredb", "list",
+            "--for-machine",
+            "--search", f"id:{book_id}",
+            "--fields", "formats",
+            "--with-library", str(self._library),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise CalibreImportError(
+                f"calibredb list failed while exporting book {book_id} "
+                f"(rc={result.returncode}): {result.stderr.strip()}"
+            )
+
+        try:
+            rows = _json.loads(result.stdout)
+        except Exception:
+            rows = []
+
+        if not rows:
+            log.info("calibre.local.exported",
+                     extra={"book_id": book_id, "files": []})
+            return []
+
+        raw_formats = rows[0].get("formats", [])
+        if isinstance(raw_formats, str):
+            raw_formats = [raw_formats] if raw_formats else []
+
+        exported: list[Path] = []
+        for fmt_str in raw_formats:
+            fmt_path = Path(fmt_str)
+
+            # Primary: remap _library → _book_files preserving relative path
+            try:
+                rel = fmt_path.relative_to(self._library)
+                candidate = self._book_files / rel
+            except ValueError:
+                # Path not under _library — unexpected; try as-is
+                candidate = fmt_path
+
+            if candidate.exists():
+                dest = dest_dir / candidate.name
+                shutil.copy2(str(candidate), str(dest))
+                exported.append(dest)
+                continue
+
+            # Fallback: scan _book_files for a file with the same name in any
+            # sub-directory.  Handles books whose directory was renamed by an
+            # earlier set_metadata call before this fix was applied.
+            fname = fmt_path.name
+            matches = [
+                p for p in self._book_files.rglob(fname)
+                if p.is_file() and p.suffix.lower() in _BOOK_EXTENSIONS
+            ]
+            if matches:
+                dest = dest_dir / matches[0].name
+                shutil.copy2(str(matches[0]), str(dest))
+                exported.append(dest)
+                log.warning(
+                    "calibre.local.export_fallback_match",
+                    extra={"book_id": book_id, "found": str(matches[0]),
+                           "expected": str(candidate)},
+                )
+
+        log.info("calibre.local.exported",
+                 extra={"book_id": book_id, "files": [str(f) for f in exported]})
         return exported
 
     def remove_book(self, book_id: int) -> None:
