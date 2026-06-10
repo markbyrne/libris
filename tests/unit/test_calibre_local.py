@@ -470,3 +470,184 @@ class TestFormatAuthors:
 
         flags = [f for pair in _metadata_flags(result) for f in pair]
         assert "authors:Terry Pratchett & Neil Gaiman" in flags
+
+
+# ---------------------------------------------------------------------------
+# set_metadata split-mode directory sync
+# ---------------------------------------------------------------------------
+
+class TestSetMetadataSplitSync:
+    """In split-library mode, set_metadata must mirror calibredb's directory
+    rename under book_file_path.
+
+    calibredb renames the book dir under library_db_path when title/authors
+    change — but the physical files were already relocated to book_file_path,
+    so the rename is a silent no-op on them while the DB path still updates.
+    Without the sync, the physical dir keeps its wrong name forever (e.g.
+    Books/Unknown/Book01-Merchant of Death (102)/) and desyncs from the DB.
+    """
+
+    def _make_result(self):
+        result = MagicMock()
+        result.title = "Pendragon: The Merchant Of Death"
+        result.best.candidate.authors = ["D.J. MacHale"]
+        result.publisher = None
+        result.description = None
+        result.language = None
+        result.isbn = None
+        result.series = None
+        result.series_index = None
+        return result
+
+    def _run_with_paths(self, backend, old_path: str | None, new_path: str | None):
+        """Drive set_metadata with calibredb list returning old_path before the
+        set_metadata subprocess call and new_path after it."""
+        responses = []
+
+        def fake_run(cmd, **kwargs):
+            if "set_metadata" in cmd:
+                return _patch_run("")
+            # calibredb list — first call returns old, later calls return new
+            path = old_path if not responses else new_path
+            responses.append(path)
+            return _patch_run(
+                _calibredb_formats_response(102, [path] if path else [])
+            )
+
+        with patch("subprocess.run", side_effect=fake_run):
+            backend.set_metadata(102, self._make_result())
+
+    def test_renames_physical_dir_when_db_path_changes(self, tmp_path):
+        library = tmp_path / "calibre-db"
+        book_files = tmp_path / "books"
+        library.mkdir()
+        book_files.mkdir()
+
+        old_dir = book_files / "Unknown" / "Book01-Merchant of Death (102)"
+        old_dir.mkdir(parents=True)
+        m4b = old_dir / "Book01-Merchant of Death - Unknown.m4b"
+        m4b.write_bytes(b"audio")
+
+        backend = _make_backend(library, book_files)
+
+        self._run_with_paths(
+            backend,
+            old_path=str(library / "Unknown" / "Book01-Merchant of Death (102)" / "x.m4b"),
+            new_path=str(library / "MacHale, D.J." / "Pendragon_ The Merchant Of Death (102)" / "x.m4b"),
+        )
+
+        new_dir = book_files / "MacHale, D.J." / "Pendragon_ The Merchant Of Death (102)"
+        assert new_dir.exists(), "Physical dir must be renamed to match the DB path"
+        assert (new_dir / "Book01-Merchant of Death - Unknown.m4b").exists()
+        assert not old_dir.exists(), "Old dir must be gone"
+        assert not (book_files / "Unknown").exists(), "Empty old author dir removed"
+
+    def test_noop_when_rel_dir_unchanged(self, tmp_path):
+        library = tmp_path / "calibre-db"
+        book_files = tmp_path / "books"
+        library.mkdir()
+        book_files.mkdir()
+
+        book_dir = book_files / "MacHale, D.J." / "Pendragon (102)"
+        book_dir.mkdir(parents=True)
+        (book_dir / "book.m4b").write_bytes(b"audio")
+
+        backend = _make_backend(library, book_files)
+        same = str(library / "MacHale, D.J." / "Pendragon (102)" / "book.m4b")
+
+        self._run_with_paths(backend, old_path=same, new_path=same)
+
+        assert book_dir.exists(), "Unchanged path must not be touched"
+
+    def test_noop_when_physical_dir_missing(self, tmp_path):
+        """If the old dir doesn't exist under book_files, skip gracefully."""
+        library = tmp_path / "calibre-db"
+        book_files = tmp_path / "books"
+        library.mkdir()
+        book_files.mkdir()
+
+        backend = _make_backend(library, book_files)
+
+        self._run_with_paths(
+            backend,
+            old_path=str(library / "Unknown" / "Gone (102)" / "x.m4b"),
+            new_path=str(library / "Author" / "Title (102)" / "x.m4b"),
+        )  # must not raise
+
+        assert not (book_files / "Author").exists()
+
+    def test_collision_skips_move_and_warns(self, tmp_path, caplog):
+        """If the destination dir already exists, skip (avoid nesting)."""
+        import logging
+
+        library = tmp_path / "calibre-db"
+        book_files = tmp_path / "books"
+        library.mkdir()
+        book_files.mkdir()
+
+        old_dir = book_files / "Unknown" / "Book (102)"
+        old_dir.mkdir(parents=True)
+        (old_dir / "book.m4b").write_bytes(b"a")
+        new_dir = book_files / "Author" / "Title (102)"
+        new_dir.mkdir(parents=True)
+        (new_dir / "existing.m4b").write_bytes(b"b")
+
+        backend = _make_backend(library, book_files)
+
+        with caplog.at_level(logging.WARNING):
+            self._run_with_paths(
+                backend,
+                old_path=str(library / "Unknown" / "Book (102)" / "x.m4b"),
+                new_path=str(library / "Author" / "Title (102)" / "x.m4b"),
+            )
+
+        assert old_dir.exists(), "Source must be untouched on collision"
+        assert (new_dir / "existing.m4b").exists()
+        assert "split_dir_sync_collision" in caplog.text
+
+    def test_flat_mode_makes_no_list_calls(self, tmp_path):
+        """When library == book_files, set_metadata runs exactly one subprocess."""
+        library = tmp_path / "calibre"
+        library.mkdir()
+        backend = _make_backend(library)  # flat mode
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = _patch_run("")
+            backend.set_metadata(1, self._make_result())
+
+        assert mock_run.call_count == 1, (
+            "Flat mode must not pay for the calibredb list round-trips"
+        )
+
+    def test_set_metadata_failure_skips_sync(self, tmp_path):
+        """rc != 0 from calibredb set_metadata must skip the dir sync."""
+        library = tmp_path / "calibre-db"
+        book_files = tmp_path / "books"
+        library.mkdir()
+        book_files.mkdir()
+
+        old_dir = book_files / "Unknown" / "Book (102)"
+        old_dir.mkdir(parents=True)
+
+        backend = _make_backend(library, book_files)
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "set_metadata" in cmd:
+                proc = _patch_run("", returncode=1)
+                proc.stderr = "boom"
+                return proc
+            return _patch_run(
+                _calibredb_formats_response(
+                    102, [str(library / "Unknown" / "Book (102)" / "x.m4b")]
+                )
+            )
+
+        with patch("subprocess.run", side_effect=fake_run):
+            backend.set_metadata(102, self._make_result())
+
+        # one list (before) + one set_metadata; no post-call list
+        list_calls = [c for c in calls if "list" in c]
+        assert len(list_calls) == 1, "No post-failure list call expected"
+        assert old_dir.exists()

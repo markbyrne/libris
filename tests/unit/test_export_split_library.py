@@ -276,10 +276,15 @@ class TestExportFromBookFiles:
 # ---------------------------------------------------------------------------
 
 class TestExportFromBookFilesFallback:
-    """When the remapped path doesn't exist, scan _book_files by filename."""
+    """When the remapped path doesn't exist, scan _book_files by filename.
+
+    This recovers books imported before set_metadata gained the split-mode
+    directory sync — their physical dir kept the old (wrong) name while the
+    DB path was updated.
+    """
 
     def test_fallback_finds_renamed_directory(self, tmp_path):
-        """File at wrong directory (due to prior set_metadata rename) is found by name scan."""
+        """File at wrong directory (pre-sync import) is found by name scan."""
         library = tmp_path / "library"
         book_files = tmp_path / "book_files"
 

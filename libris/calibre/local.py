@@ -234,6 +234,15 @@ class LocalCalibre(CalibreBackend):
         if book_id < 0:
             log.warning("calibre.local.set_metadata_skipped", extra={"reason": "unknown book_id"})
             return
+
+        # Split-library mode: changing title/authors makes calibredb rename
+        # the book directory under _library — but the physical files were
+        # already relocated to _book_files, so that rename is a silent no-op
+        # on them while the DB path still updates.  Capture the rel dir
+        # before/after and mirror the rename under _book_files.
+        split_mode = self._book_files != self._library
+        old_rel = self._book_rel_dir(book_id) if split_mode else None
+
         cmd = ["calibredb", "set_metadata", str(book_id), "--with-library", str(self._library)]
         for flag in _metadata_flags(result):
             cmd += flag
@@ -241,6 +250,58 @@ class LocalCalibre(CalibreBackend):
         result_proc = subprocess.run(cmd, capture_output=True, text=True)
         if result_proc.returncode != 0:
             log.warning("calibre.local.set_metadata_failed", extra={"stderr": result_proc.stderr})
+            return
+
+        if split_mode:
+            self._sync_book_files_dir(book_id, old_rel)
+
+    def _book_rel_dir(self, book_id: int) -> Path | None:
+        """The book's directory relative to _library, as calibredb's DB reports it.
+
+        Works regardless of where the physical files actually are — the paths
+        come from the database, not the filesystem.
+        """
+        for fmt_path in self._get_format_paths(book_id):
+            try:
+                return fmt_path.parent.relative_to(self._library)
+            except ValueError:
+                continue
+        return None
+
+    def _sync_book_files_dir(self, book_id: int, old_rel: Path | None) -> None:
+        """Mirror a calibredb directory rename under _book_files (split mode).
+
+        calibredb renames the book dir under _library when title/authors
+        change; the physical files under _book_files must follow or the DB
+        path and the real file location desync (breaking calibre-web lookups
+        and export).
+        """
+        new_rel = self._book_rel_dir(book_id)
+        if old_rel is None or new_rel is None or old_rel == new_rel:
+            return
+
+        src = self._book_files / old_rel
+        dest = self._book_files / new_rel
+        if not src.exists():
+            return
+        if dest.exists():
+            log.warning(
+                "calibre.local.split_dir_sync_collision",
+                extra={"book_id": book_id, "src": str(src), "dest": str(dest)},
+            )
+            return
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        log.info(
+            "calibre.local.split_dir_synced",
+            extra={"book_id": book_id, "src": str(src), "dest": str(dest)},
+        )
+        # Remove the now-empty old author directory
+        try:
+            src.parent.rmdir()
+        except OSError:
+            pass  # Non-empty or already gone — safe to ignore
 
     def set_cover(self, book_id: int, cover_path: Path) -> None:
         if book_id < 0 or not cover_path.exists():
