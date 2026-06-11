@@ -21,13 +21,13 @@ paths:
 
 calibre:
   # "local" = use system calibredb directly
-  # "docker" = run calibredb inside a Docker container (e.g. calibre-web on Plexi)
+  # "docker" = run calibredb inside a Docker container (e.g. a calibre-web container)
   mode: local
 
   # --- local mode ---
   library_path: ~/Calibre Library
 
-  # --- docker mode (uncomment and fill in for Plexi) ---
+  # --- docker mode (uncomment and fill in if using a container) ---
   # docker_container: calibre-web
   # path_map:
   #   # Maps host paths to container-internal paths

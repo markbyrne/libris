@@ -13,7 +13,7 @@ import logging
 import httpx
 
 from ..exceptions import RateLimitError
-from .base import BookCandidate, ScoredCandidate, SearchQuery
+from .base import USER_AGENT, BookCandidate, ScoredCandidate, SearchQuery
 from .scorer import score_candidate
 
 log = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ def fetch(
     log.debug("open_library.fetch", extra={"params": params})
 
     try:
-        _client = client or httpx.Client(timeout=_TIMEOUT)
+        _client = client or httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": USER_AGENT})
         response = _client.get(_BASE_URL, params=params)
         if response.status_code == 429:
             raise RateLimitError(

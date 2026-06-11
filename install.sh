@@ -175,12 +175,18 @@ elif [[ "$PLATFORM" == "linux" ]]; then
     if [[ ${#MISSING[@]} -gt 0 ]]; then
         warn "Missing packages: ${MISSING[*]}"
         if command -v apt-get &>/dev/null; then
-            info "Installing missing packages via apt-get…"
-            sudo apt-get update -qq
-            sudo apt-get install -y "${MISSING[@]}"
+            if ask_yn "Install via apt-get (uses sudo)?" "y"; then
+                sudo apt-get update -qq
+                sudo apt-get install -y "${MISSING[@]}"
+            else
+                warn "Install manually and re-run: ${MISSING[*]}"
+            fi
         elif command -v dnf &>/dev/null; then
-            info "Installing missing packages via dnf…"
-            sudo dnf install -y "${MISSING[@]}"
+            if ask_yn "Install via dnf (uses sudo)?" "y"; then
+                sudo dnf install -y "${MISSING[@]}"
+            else
+                warn "Install manually and re-run: ${MISSING[*]}"
+            fi
         else
             warn "Install manually and re-run: ${MISSING[*]}"
         fi
@@ -229,107 +235,8 @@ if [[ "$INSTALL_MODE" == "local" ]]; then
     info "Installing libris from local source…"
     INSTALL_TARGET="."
 else
-    # ── Private repo token check ──────────────────────────────────────────────
-    # This block is only needed while libris is a private repo during alpha/beta
-    # testing. Once the repo is made public, this check will always pass and the
-    # token prompt will never appear. It can be removed at that point.
-    GITHUB_TOKEN=""
-    REPO_URL="https://api.github.com/repos/markbyrne/libris"
-    if ! curl -fsSL "$REPO_URL" &>/dev/null; then
-        echo ""
-        warn "The libris repository is private — a GitHub token is required to install."
-        echo "  Generate one at: GitHub → Settings → Developer settings → Personal access tokens"
-        echo "  Required scope: repo (read) — or use a fine-grained token with Contents: read"
-        echo ""
-        echo "  Paste your token and press Enter:"
-        printf "  Token: "
-        GITHUB_TOKEN=""
-        read -rs GITHUB_TOKEN < /dev/tty; echo ""
-        GITHUB_TOKEN="$(printf '%s' "$GITHUB_TOKEN" | tr -d '[:space:]')"
-        if [[ -z "$GITHUB_TOKEN" ]]; then
-            error "No token provided — cannot install from private repo."
-            exit 1
-        fi
-        # Validate token looks like a GitHub PAT
-        if [[ ! "$GITHUB_TOKEN" =~ ^(ghp_|github_pat_) ]]; then
-            error "Token doesn't look like a GitHub PAT (expected ghp_ or github_pat_ prefix)."
-            error "Got prefix: '${GITHUB_TOKEN:0:12}...'"
-            error "Re-run and paste only the token value."
-            exit 1
-        fi
-    fi
-
     info "Installing libris ${LIBRIS_VERSION} from GitHub…"
-
-    if [[ -n "$GITHUB_TOKEN" ]]; then
-        # Private repo: download the tarball via GitHub API (avoids git credential
-        # URL issues) then install from the local file. This block is only needed
-        # during private alpha/beta testing — remove once the repo is public.
-        #
-        # NOTE: pasted PATs frequently carry a trailing CR (\r) or surrounding
-        # whitespace, especially over SSH/PuTTY. With IFS=$'\n\t', `read` does not
-        # strip a trailing CR, so the token can end up as "ghp_xxx\r". Passing that
-        # inside an "Authorization:" header makes older libcurl (Debian/Ubuntu)
-        # reject it with curl error 43 (CURLE_BAD_FUNCTION_ARGUMENT). Strip all
-        # CR / whitespace first, then hand curl the header via a --config file on
-        # stdin so the token never lands in the process list or the command line.
-        debug "token length: ${#GITHUB_TOKEN} chars"
-        debug "curl version: $(curl --version 2>&1 | head -1)"
-        debug "git version:  $(git --version 2>&1)"
-
-        LIBRIS_TARBALL="/tmp/libris-${LIBRIS_VERSION}.tar.gz"
-        LIBRIS_API_URL="https://api.github.com/repos/markbyrne/libris/tarball/${LIBRIS_VERSION}"
-        debug "tarball path: $LIBRIS_TARBALL"
-        debug "api url:      $LIBRIS_API_URL"
-        trap 'rm -f "$LIBRIS_TARBALL"' EXIT
-
-        download_ok=false
-        if command -v curl &>/dev/null; then
-            debug "attempting curl download via --config stdin…"
-            CURL_CONFIG="$(printf 'header = "Authorization: token %s"\n' "$GITHUB_TOKEN")"
-            debug "curl config line: header = \"Authorization: token [REDACTED]\""
-            CURL_EXIT=0
-            printf '%s\n' "$CURL_CONFIG" \
-                | curl --fail --silent --show-error --location \
-                       --config - \
-                       --output "$LIBRIS_TARBALL" \
-                       "$LIBRIS_API_URL" || CURL_EXIT=$?
-            debug "curl exit code: $CURL_EXIT"
-            if [[ $CURL_EXIT -eq 0 ]]; then
-                download_ok=true
-                debug "tarball size: $(wc -c < "$LIBRIS_TARBALL") bytes"
-            else
-                debug "curl failed — trying verbose mode for diagnostics…"
-                $DEBUG && printf '%s\n' "$CURL_CONFIG" \
-                    | curl --location --config - \
-                           --output "$LIBRIS_TARBALL" \
-                           --verbose \
-                           "$LIBRIS_API_URL" 2>&1 | grep -E "^[<>*]" >&2 || true
-            fi
-        fi
-
-        if [[ "$download_ok" != true ]] && command -v wget &>/dev/null; then
-            warn "curl download failed — retrying with wget…"
-            debug "attempting wget download…"
-            WGET_EXIT=0
-            wget --quiet \
-                 --header="Authorization: token ${GITHUB_TOKEN}" \
-                 -O "$LIBRIS_TARBALL" \
-                 "$LIBRIS_API_URL" || WGET_EXIT=$?
-            debug "wget exit code: $WGET_EXIT"
-            [[ $WGET_EXIT -eq 0 ]] && download_ok=true
-        fi
-
-        if [[ "$download_ok" != true ]]; then
-            error "Failed to download libris tarball — check your token and try again."
-            rm -f "$LIBRIS_TARBALL"
-            exit 1
-        fi
-
-        INSTALL_TARGET="$LIBRIS_TARBALL"
-    else
-        INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
-    fi
+    INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
 fi
 
 # Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
@@ -581,8 +488,19 @@ PATH_LINE="export PATH=\"\$HOME/.local/bin:\$PATH\""
 
 # ── Persist PATH if ~/.local/bin not already in profile ───────────────────────
 if ! grep -qF '.local/bin' "$PROFILE" 2>/dev/null; then
-    { echo ""; echo "# Added by Libris installer"; echo "$PATH_LINE"; } >> "$PROFILE"
-    success "Added ~/.local/bin to PATH in $PROFILE"
+    echo "  The libris command is installed to ~/.local/bin, which is not in your PATH."
+    echo ""
+    if ask_yn "Add ~/.local/bin to PATH in $PROFILE?" "y"; then
+        { echo ""; echo "# Added by Libris installer"; echo "$PATH_LINE"; } >> "$PROFILE"
+        success "Added ~/.local/bin to PATH in $PROFILE"
+    else
+        echo ""
+        info "Add this line to your shell profile manually:"
+        echo ""
+        echo "    $PATH_LINE"
+        echo ""
+    fi
+    # Available in this session either way
     export PATH="$HOME/.local/bin:$PATH"
 fi
 

@@ -18,6 +18,8 @@ import re
 
 import httpx
 
+from .base import USER_AGENT
+
 log = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.duckduckgo.com/"
@@ -52,7 +54,7 @@ def search_book_hints(
     }
 
     try:
-        _client = client or httpx.Client(timeout=_TIMEOUT)
+        _client = client or httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": USER_AGENT})
         response = _client.get(_BASE_URL, params=params)
         response.raise_for_status()
         data = response.json()

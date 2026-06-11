@@ -14,7 +14,7 @@ import httpx
 from ..cleaner import clean_query, extract_isbn
 from ..config import MetadataConfig
 from ..exceptions import RateLimitError
-from .base import MetadataResult, SearchQuery
+from .base import USER_AGENT, MetadataResult, SearchQuery
 from .scorer import build_result
 
 # Fixture data for mock_mode (keyed by clean title, case-insensitive)
@@ -113,7 +113,7 @@ def resolve_metadata(
         google_scored, ol_scored = _mock_fetch(query)
     else:
         from . import google_books, open_library
-        _client = client or httpx.Client(timeout=12.0)
+        _client = client or httpx.Client(timeout=12.0, headers={"User-Agent": USER_AGENT})
 
         google_scored = []
         try:
@@ -190,7 +190,7 @@ def resolve_metadata(
 
     # ── Download cover art ───────────────────────────────────────────────
     if embed_cover and result.best and result.best.candidate.cover_url and not config.mock_mode:
-        _client = client or httpx.Client(timeout=12.0)
+        _client = client or httpx.Client(timeout=12.0, headers={"User-Agent": USER_AGENT})
         result.cover_path = _download_cover(result.best.candidate.cover_url, _client)
 
     log.info(

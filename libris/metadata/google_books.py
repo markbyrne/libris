@@ -14,7 +14,7 @@ import re
 import httpx
 
 from ..exceptions import RateLimitError
-from .base import BookCandidate, ScoredCandidate, SearchQuery
+from .base import USER_AGENT, BookCandidate, ScoredCandidate, SearchQuery
 from .scorer import score_candidate
 
 # Patterns for series embedded in book titles
@@ -61,7 +61,7 @@ def fetch(
     log.debug("google_books.fetch", extra={"query": q_string})
 
     try:
-        _client = client or httpx.Client(timeout=_TIMEOUT)
+        _client = client or httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": USER_AGENT})
         response = _client.get(_BASE_URL, params=params, headers=headers)
         rl_reason = _rate_limit_reason(response)
         if rl_reason is not None:

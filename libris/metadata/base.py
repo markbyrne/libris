@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Descriptive User-Agent for all metadata API calls.  OpenLibrary's API
+# policy asks clients to identify themselves with a contact point; sending
+# it everywhere costs nothing and keeps the sources consistent.
+USER_AGENT = "libris (+https://github.com/markbyrne/libris)"
+
 
 @dataclass
 class BookCandidate:

@@ -16,24 +16,26 @@ Libris solves all of this. It watches a directory for new ebooks and audiobooks,
 
 The key difference from a simple import script: Libris scores each metadata match for confidence. Files it's certain about are imported immediately. Files where the match is ambiguous are quarantined in a review folder and you're notified — so your library is never silently polluted with wrong metadata.
 
-Works with local Calibre installations and with [calibre-web](https://github.com/janeczku/calibre-web) running in Docker. Pairs naturally with self-hosted download managers like LazyLibrarian, Readarr, and similar tools.
+Works with local Calibre installations and with [calibre-web](https://github.com/janeczku/calibre-web) running in Docker. Works with anything that places files in a watched folder — purchase downloads, Humble Bundle exports, library-management tools, or plain `cp`.
+
+> **Content responsibility:** Libris organizes and imports files you already have. You are responsible for ensuring you have the legal right to the content you process with it.
 
 ---
 
 ## Recommended Stack
 
-Libris is designed as one component in a self-hosted media pipeline:
+Libris is designed as one component in a self-hosted library pipeline:
 
 ```
-Download Manager       Libris                   Calibre DB         Reader App
-(Readarr /         →  watches /incoming     →  metadata.db    →  calibre-web
- LazyLibrarian)       scores + converts         book files         serves to
-                       imports via calibredb                        devices
+Your files             Libris                   Calibre DB         Reader App
+(any source        →  watches /incoming     →  metadata.db    →  calibre-web
+ that writes to       scores + converts         book files         serves to
+ a folder)            imports via calibredb                        devices
 ```
 
 | Component | Role |
 |-----------|------|
-| **Readarr** or **LazyLibrarian** | Monitors RSS feeds, downloads ebooks/audiobooks, drops files into Libris's `incoming/` directory |
+| **Your acquisition workflow** | Anything that places ebook/audiobook files in Libris's `incoming/` directory — store purchases, DRM-free bundles, or library tools such as Readarr and LazyLibrarian |
 | **Libris** | Watches `incoming/`, scores metadata confidence, converts formats (EPUB, M4B), imports into Calibre; holds ambiguous matches for manual review |
 | **Calibre** (`calibredb`) | Stores book metadata and files; the authoritative library database |
 | **calibre-web** | Serves the library to devices via a web UI; supports OPDS for e-reader apps |
@@ -84,10 +86,10 @@ bash install.sh
 ```
 
 The installer will:
-- Check and install missing system dependencies
+- Check and install missing system dependencies (it asks before using `sudo`)
 - Install the `libris` Python package
 - Create a config file at `~/.config/libris/config.yaml`
-- Add `LIBRIS_CONFIG` to your shell profile
+- Offer to add `LIBRIS_CONFIG` and `~/.local/bin` (PATH) to your shell profile — both prompts can be declined
 - Optionally install a daemon service (LaunchAgent on macOS, systemd on Linux)
 - Run `libris check-config` to verify everything works
 
@@ -659,7 +661,7 @@ You'll see the current match and a query prompt. The most effective format is `T
 - `/api google` or `/api openlibrary` to restrict to one source; `/api all` to restore both
 - `/clear` to redraw the screen
 
-**No results?** If both APIs return nothing, Libris automatically queries DuckDuckGo Instant Answers for author and ISBN hints, then retries. In `rematch`, suggested search refinements are shown:
+**No results?** If both APIs return nothing, Libris automatically queries the [DuckDuckGo Instant Answer API](https://duckduckgo.com/api) for author and ISBN hints, then retries. (Results from this fallback include data provided by DuckDuckGo.) In `rematch`, suggested search refinements are shown:
 
 ```
   Web search suggests:
@@ -686,7 +688,7 @@ libris list-failed
   3 file(s) in failed state
   ──────────────────────────────────────────────────
 
-  [1]  Downloaded from piratebay.epub  (2h 14m ago)
+  [1]  Read Me!.epub  (2h 14m ago)
         Error:  chaff detected — filename matches known non-book pattern
 
   [2]  corrupted.epub  (15m ago)
