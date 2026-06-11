@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from ..metadata.base import MetadataResult
+
+log = logging.getLogger(__name__)
 
 
 def format_authors(authors: list[str]) -> str:
@@ -15,6 +18,41 @@ def format_authors(authors: list[str]) -> str:
     single inverted name ("Surname, Given").
     """
     return " & ".join(authors)
+
+
+def notify_reconnect(url: str | None) -> None:
+    """Ping calibre-web's /reconnect endpoint after a calibredb write.
+
+    calibre-web holds metadata.db open continuously; external calibredb
+    writes accumulate in the WAL beneath its (eventually stale) connection,
+    which both blocks WAL checkpointing and can desync calibre-web's shm
+    view into "database disk image is malformed".  Hitting /reconnect makes
+    calibre-web drop and reopen its connection instead.
+
+    Best-effort by design: any failure (endpoint disabled, calibre-web down,
+    timeout) is logged and swallowed — the import itself already succeeded.
+    Requires calibre-web started with the -r flag; a 404 means it isn't.
+    """
+    if not url:
+        return
+    import httpx  # noqa: PLC0415 — keep the hot import path free of httpx
+
+    try:
+        response = httpx.get(url, timeout=5.0)
+        if response.status_code == 200:
+            log.debug("calibre.reconnect_notified", extra={"url": url})
+        elif response.status_code == 404:
+            log.warning(
+                "calibre.reconnect_unavailable: calibre-web returned 404 — "
+                "start calibre-web with the -r flag to enable /reconnect"
+            )
+        else:
+            log.warning(
+                "calibre.reconnect_failed",
+                extra={"url": url, "status": response.status_code},
+            )
+    except Exception as exc:
+        log.warning("calibre.reconnect_error", extra={"url": url, "error": str(exc)})
 
 
 class CalibreBackend(ABC):

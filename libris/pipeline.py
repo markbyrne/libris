@@ -23,7 +23,7 @@ from rapidfuzz import fuzz as _fuzz
 from .audio import converter as audio_conv
 from .audio import tagger as audio_tag
 from .calibre import get_calibre
-from .calibre.base import CalibreBackend, format_authors
+from .calibre.base import CalibreBackend, format_authors, notify_reconnect
 from .classifier import EBOOK_EXTENSIONS, Classifier, MediaType
 from .cleaner import clean_query, extract_part, is_chaff, strip_part_marker
 from .config import Config
@@ -1103,6 +1103,8 @@ class Pipeline:
 
         record.state = FileState.IMPORTED
         self._store.upsert(record)
+        # Tell calibre-web to reopen its DB connection (no-op when unset)
+        notify_reconnect(self.config.calibre.reconnect_url)
         return record
 
     def _mark_review(

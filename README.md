@@ -249,6 +249,27 @@ calibre:
 
 After each import Libris automatically moves all files in the book's directory from `library_db_path/Author/Title (id)/` into the matching path under `book_file_path` — this includes the format file (`.epub`, `.m4b`), `cover.jpg`, and `metadata.opf`. calibre-web needs all three in `book_file_path` to display covers and serve downloads correctly. If `book_file_path` is not set, behaviour is identical to the classic single-path setup.
 
+### Coexisting with calibre-web (important — avoiding database corruption)
+
+Calibre **does not support two programs using one `metadata.db` at the same time**. calibre-web keeps the database open continuously, so every Libris import (which writes via `calibredb`) accumulates in SQLite's write-ahead log *underneath* calibre-web's long-lived connection. Over days this both prevents WAL checkpointing (the WAL grows without bound) and can desync calibre-web's view into a `database disk image is malformed` error — even though the data on disk is still intact.
+
+Three layers of protection, in order of value:
+
+1. **`reconnect_url`** — set this and Libris pings calibre-web's `/reconnect` endpoint after every import and removal, making calibre-web drop and reopen its connection instead of going stale:
+
+   ```yaml
+   calibre:
+     reconnect_url: http://192.168.1.10:8083/reconnect
+   ```
+
+   The endpoint requires calibre-web to be **started with the `-r` flag** ([calibre-web#2336](https://github.com/janeczku/calibre-web/issues/2336)) — without it the endpoint returns 404 and Libris logs a warning. Note the stock [linuxserver.io calibre-web image](https://github.com/linuxserver/docker-calibre-web/issues/182) provides no way to pass CLI flags; images such as calibre-web-automated enable it by default. The ping is best-effort: if calibre-web is down or the endpoint is missing, the import still succeeds.
+
+2. **Restart calibre-web nightly** (cron: `0 4 * * * docker restart calibre-web`) — caps the connection age and forces a clean WAL checkpoint.
+
+3. **Back up `metadata.db` nightly** using Python's `sqlite3` backup API (safe against a live database, unlike `cp`).
+
+If you ever hit `database disk image is malformed`: **copy `metadata.db`, `metadata.db-wal`, and `metadata.db-shm` somewhere safe *before* stopping or restarting anything.** The WAL usually still holds your recent imports intact, but a stopping process can checkpoint its corrupted view into the main file and destroy a recoverable database. Then verify with `sqlite3 "file:copy.db?immutable=1&mode=ro" "PRAGMA integrity_check;"`.
+
 ### Docker config (e.g. calibre-web in a container)
 
 ```yaml
