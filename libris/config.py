@@ -46,6 +46,12 @@ class CalibreConfig:
     # Maps host path prefixes → container path prefixes for docker mode.
     # Example: {"/media/pidrive/Books": "/books"}
     path_map: dict[str, str] = field(default_factory=dict)
+    # reconnect_url — calibre-web /reconnect endpoint, pinged after each
+    # import so calibre-web drops its (possibly stale) DB connection instead
+    # of holding it open across external calibredb writes.  Requires
+    # calibre-web started with the -r flag.  None = disabled.
+    # Example: "http://192.168.1.10:8083/reconnect"
+    reconnect_url: str | None = None
 
     @property
     def library_path(self) -> Path | None:
@@ -196,6 +202,8 @@ def load_config(config_path: Path) -> Config:
         docker_container=os.environ.get("LIBRIS_CALIBRE_DOCKER_CONTAINER")
                          or calibre_raw.get("docker_container", "calibre-web"),
         path_map=calibre_raw.get("path_map") or {},
+        reconnect_url=os.environ.get("LIBRIS_CALIBRE_RECONNECT_URL")
+                      or calibre_raw.get("reconnect_url") or None,
     )
 
     if calibre.mode == "local" and calibre.library_db_path is None:

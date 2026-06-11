@@ -41,6 +41,7 @@ import httpx
 import yaml
 
 from .calibre import get_calibre
+from .calibre.base import notify_reconnect
 from .classifier import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
 from .cleaner import clean_query as _clean_query
 from .cleaner import is_chaff as _is_chaff
@@ -2695,6 +2696,7 @@ def revert_import(
     # Remove from Calibre
     try:
         calibre.remove_book(book_id)
+        notify_reconnect(config.calibre.reconnect_url)
         click.echo(f"  Removed book {book_id} from Calibre library.")
     except Exception as exc:
         store.close()
@@ -3086,6 +3088,10 @@ def clean_library(dry_run: bool, yes: bool, config_path: Path | None) -> None:
                     "Run 'libris list-review' to triage, 'libris rematch' to match them.",
                     fg="green",
                 ))
+
+    # All passes may have written through calibredb — let calibre-web reopen
+    if not dry_run:
+        notify_reconnect(config.calibre.reconnect_url)
 
     click.echo()
     store.close()

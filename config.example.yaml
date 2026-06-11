@@ -27,6 +27,12 @@ calibre:
   # --- local mode ---
   library_path: ~/Calibre Library
 
+  # --- calibre-web coexistence (recommended if calibre-web shares this library) ---
+  # Ping calibre-web's /reconnect endpoint after every import/removal so it
+  # reopens its DB connection instead of going stale (prevents "database disk
+  # image is malformed").  Requires calibre-web started with the -r flag.
+  # reconnect_url: http://192.168.1.10:8083/reconnect
+
   # --- docker mode (uncomment and fill in if using a container) ---
   # docker_container: calibre-web
   # path_map:
