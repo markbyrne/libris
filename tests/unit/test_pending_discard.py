@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
 from libris.cli import main
 from libris.state import FileRecord, FileState
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

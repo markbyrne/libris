@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Chaff detection
@@ -89,10 +87,7 @@ def is_chaff(filename: str) -> bool:
 
     # Normalize stem for prefix matching (strip leading punctuation/brackets)
     stem_norm = re.sub(r"^[\[\(!\s]+", "", stem)
-    if any(stem_norm.startswith(pfx) for pfx in _CHAFF_PREFIXES):
-        return True
-
-    return False
+    return bool(any(stem_norm.startswith(pfx) for pfx in _CHAFF_PREFIXES))
 
 
 # Ordered list of (pattern, replacement) substitutions applied sequentially.
@@ -252,7 +247,7 @@ _PART_STRIP_PATTERNS = (
 )
 
 
-def extract_part(raw: str) -> tuple[Optional[int], Optional[int]]:
+def extract_part(raw: str) -> tuple[int | None, int | None]:
     """Extract (part_num, total_parts) from a filename stem.
 
     Returns (None, None) if no part pattern is found.

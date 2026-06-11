@@ -11,11 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from libris.classifier import MediaType
 from libris.state import FileRecord, FileState
-
 
 # ---------------------------------------------------------------------------
 # Minimal pipeline factory
@@ -158,7 +155,7 @@ class TestForceImportAudioGuard:
         cfg.output.embed_cover_art = False
 
         mock_store = MagicMock()
-        record = _fake_record(tmp_path / "placeholder")
+        _fake_record(tmp_path / "placeholder")
         mock_store.get_by_current_path.return_value = None
         mock_store.get_by_original_path.return_value = None
 

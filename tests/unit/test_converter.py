@@ -10,7 +10,6 @@ import pytest
 from libris.audio.converter import _check_disk_space, _choose_tmp_dir, _fmt_bytes
 from libris.exceptions import ConversionError
 
-
 # ---------------------------------------------------------------------------
 # _fmt_bytes
 # ---------------------------------------------------------------------------

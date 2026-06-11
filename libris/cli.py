@@ -35,21 +35,21 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
-
-import yaml
 
 import click
 import httpx
+import yaml
 
 from .calibre import get_calibre
 from .classifier import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
-from .cleaner import clean_query as _clean_query, is_chaff as _is_chaff, strip_part_marker as _strip_part_marker
+from .cleaner import clean_query as _clean_query
+from .cleaner import is_chaff as _is_chaff
+from .cleaner import strip_part_marker as _strip_part_marker
 from .config import load_config
 from .exceptions import ConfigError, RateLimitError
 from .metadata.base import MetadataResult, SearchQuery
-from .metadata.resolver import _extract_author_hint, _extract_year, _extract_series, _SERIES_PREFIX
-from .metadata.scorer import dedup_candidates, score_candidate
+from .metadata.resolver import _SERIES_PREFIX, _extract_author_hint, _extract_series, _extract_year
+from .metadata.scorer import dedup_candidates
 from .pipeline import Pipeline
 from .state import FileRecord, FileState, StateStore
 
@@ -83,7 +83,7 @@ _CONFIG_OPTION = click.option(
 _WEIGHT_MAX = {"isbn": 0.40, "title": 0.30, "author": 0.20, "year": 0.10}
 
 
-def _resolve_config(config_path: Optional[Path]) -> Path:
+def _resolve_config(config_path: Path | None) -> Path:
     """Return the config path to use, in priority order:
 
     1. ``--config <path>`` CLI flag
@@ -236,7 +236,7 @@ def _show_queue_summary(config) -> None:
     click.echo()
 
 
-def _live_review_records(store: "StateStore") -> list:
+def _live_review_records(store: StateStore) -> list:
     """Return REVIEW records whose file still exists on disk, in stable order.
 
     Records pointing to files that have been moved or deleted are silently
@@ -435,7 +435,7 @@ def main() -> None:
 
 @main.command()
 @_CONFIG_OPTION
-def run(config_path: Optional[Path]) -> None:
+def run(config_path: Path | None) -> None:
     """Start the file watcher daemon."""
     path = _resolve_config(config_path)
     config = load_config(path)
@@ -447,7 +447,7 @@ def run(config_path: Optional[Path]) -> None:
 @main.command("import-one")
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
 @_CONFIG_OPTION
-def import_one(file_path: Path, config_path: Optional[Path]) -> None:
+def import_one(file_path: Path, config_path: Path | None) -> None:
     """Process a single file immediately (no daemon, useful for testing)."""
     path = _resolve_config(config_path)
     config = load_config(path)
@@ -492,7 +492,7 @@ def import_one(file_path: Path, config_path: Optional[Path]) -> None:
     help="Treat all audio files as parts of one audiobook (ignores per-file part markers).",
 )
 @_CONFIG_OPTION
-def import_dir(directory: Path, combine_all: bool, config_path: Optional[Path]) -> None:
+def import_dir(directory: Path, combine_all: bool, config_path: Path | None) -> None:
     """Import a directory of audio files as an audiobook.
 
     Without --combine-all, each file is processed individually through the
@@ -557,7 +557,7 @@ def import_dir(directory: Path, combine_all: bool, config_path: Optional[Path]) 
 
 @main.command("check-config")
 @_CONFIG_OPTION
-def check_config(config_path: Optional[Path]) -> None:
+def check_config(config_path: Path | None) -> None:
     """Validate config file and print resolved settings."""
     path = _resolve_config(config_path)
     try:
@@ -680,7 +680,7 @@ def check_config(config_path: Optional[Path]) -> None:
 
 @main.command("list-review")
 @_CONFIG_OPTION
-def list_review(config_path: Optional[Path]) -> None:
+def list_review(config_path: Path | None) -> None:
     """List all files currently in REVIEW state (low-confidence matches)."""
     path = _resolve_config(config_path)
     config = load_config(path)
@@ -753,7 +753,7 @@ def list_review(config_path: Optional[Path]) -> None:
 @click.option("--id", "review_id", required=True, type=int,
               help="Review queue position (from 'libris list-review')")
 @_CONFIG_OPTION
-def show_cover(review_id: int, config_path: Optional[Path]) -> None:
+def show_cover(review_id: int, config_path: Path | None) -> None:
     """Open the cover image for a review queue item in the default browser.
 
     \b
@@ -825,12 +825,12 @@ def show_cover(review_id: int, config_path: Optional[Path]) -> None:
               help="Remove DB records for review items whose file no longer exists on disk")
 @_CONFIG_OPTION
 def review_discard(
-    review_id: Optional[int],
+    review_id: int | None,
     duplicates_only: bool,
     discard_chaff: bool,
     discard_all: bool,
     discard_stale: bool,
-    config_path: Optional[Path],
+    config_path: Path | None,
 ) -> None:
     """Delete a review-queue file and remove it from the queue.
 
@@ -971,11 +971,11 @@ def review_discard(
               help="Import even if the book is already in the Calibre library (bypass duplicate check)")
 @_CONFIG_OPTION
 def review_accept(
-    file_path: Optional[Path],
-    review_id: Optional[int],
+    file_path: Path | None,
+    review_id: int | None,
     accept_all: bool,
     overwrite: bool,
-    config_path: Optional[Path],
+    config_path: Path | None,
 ) -> None:
     """Force-import file(s) from review/, bypassing the confidence threshold.
 
@@ -1309,10 +1309,10 @@ def review_accept(
                    "With --id or --all: removes those records (and their files if present).")
 @_CONFIG_OPTION
 def recover(
-    recover_id: Optional[int],
+    recover_id: int | None,
     recover_all: bool,
     delete_records: bool,
-    config_path: Optional[Path],
+    config_path: Path | None,
 ) -> None:
     """Move failed files back to review/ for re-processing.
 
@@ -1463,7 +1463,8 @@ def recover(
 
 def _age_str(created_at) -> str:
     """Return a human-readable age string like '2d 4h' or '3h 12m'."""
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
     now = _dt.now(_tz.utc)
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=_tz.utc)
@@ -1527,7 +1528,7 @@ def _render_failed_list(records: list) -> None:
 
 @main.command("list-failed")
 @_CONFIG_OPTION
-def list_failed(config_path: Optional[Path]) -> None:
+def list_failed(config_path: Path | None) -> None:
     """Show all files currently in FAILED state.
 
     Displays each file, its error message, and how long it has been there.
@@ -1555,10 +1556,10 @@ def list_failed(config_path: Optional[Path]) -> None:
               help="Remove all failed files whose filenames match known chaff patterns")
 @_CONFIG_OPTION
 def remove(
-    remove_id: Optional[int],
+    remove_id: int | None,
     remove_all: bool,
     remove_chaff: bool,
-    config_path: Optional[Path],
+    config_path: Path | None,
 ) -> None:
     """Permanently delete failed file(s) and their database records.
 
@@ -1632,7 +1633,7 @@ def remove(
 @click.option("--dry-run", is_flag=True, default=False,
               help="Show what would be removed without making any changes")
 @_CONFIG_OPTION
-def prune(dry_run: bool, config_path: Optional[Path]) -> None:
+def prune(dry_run: bool, config_path: Path | None) -> None:
     """Remove stale database records for files that no longer exist on disk.
 
     Scans FAILED and PENDING_PARTS records and deletes any whose file has
@@ -1691,7 +1692,7 @@ def prune(dry_run: bool, config_path: Optional[Path]) -> None:
 
 @main.command("list-pending")
 @_CONFIG_OPTION
-def list_pending(config_path: Optional[Path]) -> None:
+def list_pending(config_path: Path | None) -> None:
     """Show multi-part audiobooks waiting for all parts to arrive.
 
     Parts are held in staging/pending/ until the complete set is received,
@@ -1702,7 +1703,7 @@ def list_pending(config_path: Optional[Path]) -> None:
     \b
       libris list-pending
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     path = _resolve_config(config_path)
     config = load_config(path)
     store = _open_store(config.paths.state_db)
@@ -1772,7 +1773,7 @@ def list_pending(config_path: Optional[Path]) -> None:
 @click.option("--id", "group_id", required=True, type=int,
               help="Pending group position (from 'libris list-pending')")
 @_CONFIG_OPTION
-def pending_discard(group_id: int, config_path: Optional[Path]) -> None:
+def pending_discard(group_id: int, config_path: Path | None) -> None:
     """Move a pending part group back to review/ for re-processing.
 
     Strips part markers from filenames, clears part tracking metadata, and
@@ -1869,9 +1870,9 @@ def pending_discard(group_id: int, config_path: Optional[Path]) -> None:
 def mark_as_part(
     review_id: int,
     part_num: int,
-    total_parts: Optional[int],
-    group_name: Optional[str],
-    config_path: Optional[Path],
+    total_parts: int | None,
+    group_name: str | None,
+    config_path: Path | None,
 ) -> None:
     """Flag a review-queue audiobook as part N of a multi-part set.
 
@@ -1969,7 +1970,7 @@ def mark_as_part(
                     fg="green",
                 ))
             else:
-                click.echo(f"  🔍  Combined → review/  (run 'libris list-review')")
+                click.echo("  🔍  Combined → review/  (run 'libris list-review')")
             click.echo()
             return
 
@@ -2000,7 +2001,7 @@ def mark_as_part(
 @click.option("--id2", required=True, type=int,
               help="Secondary group position (its parts are moved to group 1)")
 @_CONFIG_OPTION
-def pair_pending(id1: int, id2: int, config_path: Optional[Path]) -> None:
+def pair_pending(id1: int, id2: int, config_path: Path | None) -> None:
     """Merge two pending groups so their parts are combined together.
 
     Group 2 is absorbed into group 1: all parts are re-sequenced in order,
@@ -2097,9 +2098,9 @@ def pair_pending(id1: int, id2: int, config_path: Optional[Path]) -> None:
               help="Force-combine all pending groups with available parts")
 @_CONFIG_OPTION
 def combine_parts(
-    group_id: Optional[int],
+    group_id: int | None,
     combine_all: bool,
-    config_path: Optional[Path],
+    config_path: Path | None,
 ) -> None:
     """Force-combine a pending part group and import it into Calibre.
 
@@ -2164,7 +2165,7 @@ def combine_parts(
                 click.echo(f"       Score:   {result_record.confidence:.2f}")
             else:
                 click.echo(f"  🔍  {result_record.matched_title or group_key} → review/")
-                click.echo(f"       Run 'libris rematch' to find the correct match.")
+                click.echo("       Run 'libris rematch' to find the correct match.")
         except Exception as exc:
             click.echo(click.style(f"  ❌  {group_key}: {exc}", fg="red"), err=True)
             any_failed = True
@@ -2188,7 +2189,7 @@ def _fmt_age(delta) -> str:
 @main.command("search")
 @click.argument("query")
 @_CONFIG_OPTION
-def search(query: str, config_path: Optional[Path]) -> None:
+def search(query: str, config_path: Path | None) -> None:
     """Search the Calibre library and show matching book IDs.
 
     QUERY is passed directly to calibredb as a search expression.
@@ -2223,7 +2224,7 @@ def search(query: str, config_path: Optional[Path]) -> None:
               default="all", show_default=True,
               help="Metadata source(s) to query")
 @_CONFIG_OPTION
-def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
+def rematch(review_id: int, source: str, config_path: Path | None) -> None:
     """Interactively re-query metadata APIs for a review queue item.
 
     Shows top 3 candidates with full score breakdowns. Refine the search
@@ -2386,7 +2387,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                             client=client,
                         )
                         _g = len(google_results)
-                        click.echo(f"    Google Books   " + (
+                        click.echo("    Google Books   " + (
                             click.style(f"{_g} result(s)", bold=True) if _g
                             else click.style("no results", dim=True)
                         ))
@@ -2408,7 +2409,7 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
                     try:
                         ol_results = open_library.fetch(search_query, client=client)
                         _ol = len(ol_results)
-                        click.echo(f"    OpenLibrary    " + (
+                        click.echo("    OpenLibrary    " + (
                             click.style(f"{_ol} result(s)", bold=True) if _ol
                             else click.style("no results", dim=True)
                         ))
@@ -2617,9 +2618,9 @@ def rematch(review_id: int, source: str, config_path: Optional[Path]) -> None:
               help="Search Calibre by title/author, show matches, then prompt for the ID to revert.")
 @_CONFIG_OPTION
 def revert_import(
-    book_id: Optional[int],
-    search_query: Optional[str],
-    config_path: Optional[Path],
+    book_id: int | None,
+    search_query: str | None,
+    config_path: Path | None,
 ) -> None:
     """Remove a book from Calibre and return it to review/ for re-processing.
 
@@ -2726,7 +2727,7 @@ def revert_import(
 
 @main.command("reset")
 @_CONFIG_OPTION
-def reset(config_path: Optional[Path]) -> None:
+def reset(config_path: Path | None) -> None:
     """Reset stuck PROCESSING records back to INCOMING.
 
     If Libris crashes mid-import it can leave records in PROCESSING state,
@@ -2757,7 +2758,7 @@ def reset(config_path: Optional[Path]) -> None:
 @click.option("--yes", is_flag=True, default=False,
               help="Skip the confirmation prompt before removing entries whose files are missing")
 @_CONFIG_OPTION
-def clean_library(dry_run: bool, yes: bool, config_path: Optional[Path]) -> None:
+def clean_library(dry_run: bool, yes: bool, config_path: Path | None) -> None:
     """Deduplicate, re-queue Unknown books, and reconcile DB against disk.
 
     \b
@@ -2825,14 +2826,11 @@ def clean_library(dry_run: bool, yes: bool, config_path: Optional[Path]) -> None
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for b in books:
         title_key = _norm(b["title"])
-        if b["authors"]:
-            surname = _norm(b["authors"][0].split()[-1])
-        else:
-            surname = ""
+        surname = _norm(b["authors"][0].split()[-1]) if b["authors"] else ""
         groups[(title_key, surname)].append(b)
 
     dedup_removed = 0
-    for key, group in sorted(groups.items()):
+    for _key, group in sorted(groups.items()):
         if len(group) < 2:
             continue
         # Sort by ID: keep the lowest (earliest import)
@@ -2914,7 +2912,7 @@ def clean_library(dry_run: bool, yes: bool, config_path: Optional[Path]) -> None
                     exported = calibre.export_book(b["id"], tmp)
                     if not exported:
                         click.echo(
-                            click.style(f"       ⚠ export returned no files — skipping", fg="yellow"),
+                            click.style("       ⚠ export returned no files — skipping", fg="yellow"),
                             err=True,
                         )
                         shutil.rmtree(tmp, ignore_errors=True)
@@ -3102,7 +3100,7 @@ def clean_library(dry_run: bool, yes: bool, config_path: Optional[Path]) -> None
 @click.option("--dry-run", is_flag=True, default=False,
               help="Print what would be moved without making any changes")
 @_CONFIG_OPTION
-def migrate_libris(to_path: Path, dry_run: bool, config_path: Optional[Path]) -> None:
+def migrate_libris(to_path: Path, dry_run: bool, config_path: Path | None) -> None:
     """Move Libris operational directories and state DB to a new root.
 
     Moves incoming/, staging/, review/, failed/, and the state database to
@@ -3115,7 +3113,6 @@ def migrate_libris(to_path: Path, dry_run: bool, config_path: Optional[Path]) ->
       libris check-config                            # verify
     """
     import os as _os
-    import subprocess as _sp
 
     cfg_path = _resolve_config(config_path)
     config = load_config(cfg_path)
@@ -3218,7 +3215,7 @@ def migrate_libris(to_path: Path, dry_run: bool, config_path: Optional[Path]) ->
 
     # ── Execute moves ─────────────────────────────────────────────────────
     to_path.mkdir(parents=True, exist_ok=True)
-    for label, old, new in dir_mappings:
+    for _label, old, new in dir_mappings:
         if old.exists():
             new.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(str(old), str(new), dirs_exist_ok=True)
@@ -3227,7 +3224,7 @@ def migrate_libris(to_path: Path, dry_run: bool, config_path: Optional[Path]) ->
         else:
             click.echo(click.style(f"  ⚠ {old.name} — source missing, skipped", fg="yellow"))
 
-    for label, old, new in file_mappings:
+    for _label, old, new in file_mappings:
         if old.exists():
             new.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(old), str(new))
@@ -3242,7 +3239,7 @@ def migrate_libris(to_path: Path, dry_run: bool, config_path: Optional[Path]) ->
         label: new for label, _old, new in all_moves
     })
     click.echo(f"  ✅  Config updated: {cfg_path}")
-    click.echo(f"      Run 'libris check-config' to verify.")
+    click.echo("      Run 'libris check-config' to verify.")
     click.echo()
 
 
@@ -3267,7 +3264,7 @@ def migrate_library(
     books_only: bool,
     db_only: bool,
     dry_run: bool,
-    config_path: Optional[Path],
+    config_path: Path | None,
 ) -> None:
     """Move Calibre library files to a new location and update the config.
 
@@ -3297,7 +3294,7 @@ def migrate_library(
     from_path = from_path.expanduser().resolve()
     to_path   = to_path.expanduser().resolve()
     cfg_path  = _resolve_config(config_path)
-    config    = load_config(cfg_path)
+    load_config(cfg_path)
 
     if not from_path.exists():
         _die(f"from_path does not exist: {from_path}")
@@ -3365,7 +3362,7 @@ def migrate_library(
                 f"  ⚠   {len(conflicts)} file(s) already exist at the destination:",
                 fg="yellow",
             ))
-            for src, dest in conflicts[:5]:
+            for _src, dest in conflicts[:5]:
                 click.echo(f"        {dest.relative_to(to_path)}")
             if len(conflicts) > 5:
                 click.echo(f"        … and {len(conflicts) - 5} more")
@@ -3488,7 +3485,7 @@ def migrate_library(
         })
         click.echo(f"  ✅  Config updated: {cfg_path}")
 
-    click.echo(f"      Run 'libris check-config' to verify.")
+    click.echo("      Run 'libris check-config' to verify.")
     click.echo()
 
 

@@ -11,8 +11,7 @@ from libris.metadata.scorer import (
     pick_best,
     score_candidate,
 )
-from tests.conftest import DUNE, ERAGON, PROJECT_HAIL_MARY, make_scored
-
+from tests.conftest import DUNE, PROJECT_HAIL_MARY, make_scored
 
 # ---------------------------------------------------------------------------
 # score_candidate
@@ -37,7 +36,7 @@ class TestScoreCandidate:
 
     def test_partial_title_match_lower_score(self):
         query = SearchQuery(clean_title="Hail Mary Project")   # scrambled
-        exact = score_candidate(SearchQuery(clean_title="Project Hail Mary"), PROJECT_HAIL_MARY)
+        score_candidate(SearchQuery(clean_title="Project Hail Mary"), PROJECT_HAIL_MARY)
         partial = score_candidate(query, PROJECT_HAIL_MARY)
         # token_sort_ratio handles word order → should still be high
         assert partial.score_breakdown["title"] >= 0.25
@@ -154,7 +153,7 @@ class TestAgreementBonus:
         g_scored = score_candidate(query, PROJECT_HAIL_MARY)
         o_scored = score_candidate(query, DUNE)
 
-        before_max = max(g_scored.confidence, o_scored.confidence)
+        max(g_scored.confidence, o_scored.confidence)
         winner = _apply_agreement_bonus(g_scored, o_scored)
         assert winner is not None
         # Winner should be Project Hail Mary (higher score); no bonus

@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from libris.calibre.local import LocalCalibre
 from libris.config import CalibreConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers

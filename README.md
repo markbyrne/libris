@@ -1,5 +1,9 @@
 # Libris
 
+[![CI](https://github.com/markbyrne/libris/actions/workflows/ci.yml/badge.svg)](https://github.com/markbyrne/libris/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+
 **Automatic Calibre import with confidence-scored metadata matching.**
 
 If you use Calibre to manage your ebook and audiobook library, you've likely hit these problems:
@@ -1502,4 +1506,4 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ## License
 
-MIT
+[MIT](LICENSE)

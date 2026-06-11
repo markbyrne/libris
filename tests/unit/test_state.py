@@ -1,7 +1,6 @@
 """Tests for libris.state — FileRecord and SQLite StateStore."""
 
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 

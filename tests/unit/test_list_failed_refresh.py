@@ -7,7 +7,6 @@ the updated failed queue is reprinted using the shared _render_failed_list helpe
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +14,6 @@ from click.testing import CliRunner
 
 from libris.cli import main
 from libris.state import FileRecord, FileState
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

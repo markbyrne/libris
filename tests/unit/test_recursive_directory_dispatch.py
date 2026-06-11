@@ -17,16 +17,12 @@ New behaviour:
 from __future__ import annotations
 
 import textwrap
-from collections import defaultdict
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from click.testing import CliRunner
 
-from libris.cli import main
 from libris.state import FileRecord, FileState
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -400,7 +396,7 @@ class TestEbookHandling:
         with patch.object(pipeline, "_process_ebook", side_effect=fake_ebook):
             # Call _process_ebook(folder, ...) directly to test the delegation path
             with patch.object(pipeline, "_process_audiobook_folder",
-                               wraps=pipeline._process_audiobook_folder) as mock_folder:
+                               wraps=pipeline._process_audiobook_folder):
                 # We want to confirm _process_ebook(dir) → _process_audiobook_folder
                 # Use the real _process_audiobook_folder but mock _process_ebook for files
                 pass
@@ -427,7 +423,7 @@ class TestDirectoryCleanup:
     def test_directory_removed_after_dispatch(self, tmp_path):
         """Original directory tree is removed once files are processed."""
         folder = tmp_path / "drop"
-        af = _audio(tmp_path, "drop", "sub", "Book.m4b")
+        _audio(tmp_path, "drop", "sub", "Book.m4b")
 
         pipeline = _make_pipeline(tmp_path)
         pipeline._get_or_create_record = lambda p, mt: FileRecord(

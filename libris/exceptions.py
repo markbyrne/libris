@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 
 class BookPipelineError(Exception):
     """Base exception for all libris errors."""
@@ -52,8 +50,8 @@ class RateLimitError(BookPipelineError):
     def __init__(
         self,
         source: str,
-        retry_after: Optional[int] = None,
-        reason: Optional[str] = None,
+        retry_after: int | None = None,
+        reason: str | None = None,
     ) -> None:
         self.source = source            # "google_books" | "open_library"
         self.retry_after = retry_after  # seconds from Retry-After header, or None

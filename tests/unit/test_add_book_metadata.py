@@ -26,7 +26,6 @@ from unittest.mock import MagicMock, patch
 
 from libris.state import FileRecord, FileState
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

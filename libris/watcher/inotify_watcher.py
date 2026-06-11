@@ -80,10 +80,10 @@ class InotifyWatcher(Watcher):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             raise WatcherError(
                 "inotifywait not found. Install with: sudo apt install inotify-tools"
-            )
+            ) from exc
 
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()

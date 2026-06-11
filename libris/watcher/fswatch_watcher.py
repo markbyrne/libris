@@ -10,7 +10,6 @@ the 'incoming' sentinel directory, then poll for size stability before yielding.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -87,10 +86,10 @@ class FswatchWatcher(Watcher):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             raise WatcherError(
                 "fswatch not found. Install with: brew install fswatch"
-            )
+            ) from exc
 
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()

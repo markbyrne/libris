@@ -18,10 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from libris.exceptions import ConfigError
-
 
 # ---------------------------------------------------------------------------
 # State enum
@@ -47,25 +45,25 @@ class FileRecord:
     current_path: str                 # may change if file is moved to review/failed
     media_type: str                   # "ebook" | "audiobook" | "unknown"
     state: FileState
-    confidence: Optional[float] = None
-    matched_title: Optional[str] = None
-    matched_author: Optional[str] = None
-    error_msg: Optional[str] = None
-    calibre_book_id: Optional[int] = None   # Calibre library book ID after import
+    confidence: float | None = None
+    matched_title: str | None = None
+    matched_author: str | None = None
+    error_msg: str | None = None
+    calibre_book_id: int | None = None   # Calibre library book ID after import
     # Extra match detail — populated when a file enters review so list-review
     # can show the user enough context to decide whether the match is correct.
-    matched_year: Optional[int] = None
-    matched_publisher: Optional[str] = None
-    matched_isbn: Optional[str] = None
-    matched_cover_url: Optional[str] = None
+    matched_year: int | None = None
+    matched_publisher: str | None = None
+    matched_isbn: str | None = None
+    matched_cover_url: str | None = None
     # Full serialised ScoredCandidate JSON — used by review-accept to import
     # without hitting the API again.  Set when file enters review.
-    matched_metadata_json: Optional[str] = None
+    matched_metadata_json: str | None = None
     # Multi-part audiobook tracking — set when state == PENDING_PARTS.
     # part_group_key groups sibling parts together (normalised clean title).
-    part_num: Optional[int] = None
-    total_parts: Optional[int] = None
-    part_group_key: Optional[str] = None
+    part_num: int | None = None
+    total_parts: int | None = None
+    part_group_key: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -215,14 +213,14 @@ class StateStore:
     # Read
     # ------------------------------------------------------------------
 
-    def get(self, record_id: str) -> Optional[FileRecord]:
+    def get(self, record_id: str) -> FileRecord | None:
         """Fetch a record by ID. Returns None if not found."""
         row = self._conn.execute(
             "SELECT * FROM files WHERE id = ?", (record_id,)
         ).fetchone()
         return _row_to_record(row) if row else None
 
-    def get_by_calibre_id(self, calibre_book_id: int) -> Optional[FileRecord]:
+    def get_by_calibre_id(self, calibre_book_id: int) -> FileRecord | None:
         """Fetch the most recent record for a given Calibre book ID."""
         row = self._conn.execute(
             "SELECT * FROM files WHERE calibre_book_id = ? ORDER BY updated_at DESC LIMIT 1",
@@ -230,7 +228,7 @@ class StateStore:
         ).fetchone()
         return _row_to_record(row) if row else None
 
-    def get_by_current_path(self, path: str) -> Optional[FileRecord]:
+    def get_by_current_path(self, path: str) -> FileRecord | None:
         """Fetch by current_path (most recent if duplicates exist)."""
         row = self._conn.execute(
             "SELECT * FROM files WHERE current_path = ? ORDER BY updated_at DESC LIMIT 1",
@@ -238,7 +236,7 @@ class StateStore:
         ).fetchone()
         return _row_to_record(row) if row else None
 
-    def get_by_path(self, path: str) -> Optional[FileRecord]:
+    def get_by_path(self, path: str) -> FileRecord | None:
         """Fetch by original_path (most recent if duplicates exist)."""
         row = self._conn.execute(
             "SELECT * FROM files WHERE original_path = ? ORDER BY created_at DESC LIMIT 1",

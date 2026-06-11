@@ -28,7 +28,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -74,7 +73,7 @@ class TestMapMetadataClear:
         """-map_metadata -1 must appear in the command (clears stale atoms)."""
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
 
-        pairs = list(zip(cmd, cmd[1:]))
+        pairs = list(zip(cmd, cmd[1:], strict=False))
         assert ("-map_metadata:g", "-1") in pairs, (
             "-map_metadata -1 is missing; stale ©ART / ©alb atoms will persist "
             "and calibredb will read the wrong author/title from the source file."
@@ -105,7 +104,7 @@ class TestMapMetadataClear:
 
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result(), cover)
 
-        pairs = list(zip(cmd, cmd[1:]))
+        pairs = list(zip(cmd, cmd[1:], strict=False))
         assert ("-map_metadata:g", "-1") in pairs, (
             "-map_metadata -1 missing in cover-art variant of the command."
         )
@@ -122,7 +121,7 @@ class TestChapterPreservation:
         """-map_chapters 0 appears to copy chapters from input."""
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
 
-        pairs = list(zip(cmd, cmd[1:]))
+        pairs = list(zip(cmd, cmd[1:], strict=False))
         assert ("-map_chapters", "0") in pairs, (
             "-map_chapters 0 is missing; combined M4Bs will lose embedded "
             "chapter markers after embed_metadata is called."
@@ -156,7 +155,7 @@ class TestChapterPreservation:
         """
         cmd = _build_cmd(tmp_path / "in.m4b", tmp_path / "out.m4b", _make_result())
 
-        pairs = list(zip(cmd, cmd[1:]))
+        pairs = list(zip(cmd, cmd[1:], strict=False))
         assert ("-map_metadata", "0:c") not in pairs, (
             "-map_metadata 0:c found — this breaks ffmpeg on chapterless "
             "inputs; use -map_chapters 0 instead."
@@ -227,7 +226,7 @@ class TestBrisingrScenario:
         cmd = _build_cmd(tmp_path / "Inheritance Cycle 3 - Brisingr.m4b",
                          tmp_path / "out.m4b", result)
 
-        pairs = list(zip(cmd, cmd[1:]))
+        pairs = list(zip(cmd, cmd[1:], strict=False))
         # The presence of -map_metadata -1 guarantees no stale atoms from the
         # source file reach the output — this is the specific mechanism that
         # prevented calibredb from picking up ©ART='Brisingr' as the author.

@@ -18,11 +18,10 @@ from libris.config import (
     PathsConfig,
     WatcherConfig,
 )
-from libris.metadata.base import BookCandidate, SearchQuery, ScoredCandidate
+from libris.metadata.base import BookCandidate, ScoredCandidate, SearchQuery
 from libris.metadata.scorer import score_candidate
 from libris.state import FileRecord, FileState
 from libris.watcher.base import FileEvent, Watcher
-
 
 # ---------------------------------------------------------------------------
 # Config fixture

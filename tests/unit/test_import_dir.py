@@ -13,14 +13,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import List, Optional
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 
 from libris.cleaner import extract_part, strip_part_marker
 from libris.state import FileRecord, FileState
-
 
 # ---------------------------------------------------------------------------
 # 1. extract_part — compact Disc/CD patterns
@@ -105,8 +103,13 @@ def test_import_directory_combined_calls_handle_pending_part_correctly(tmp_path)
     combined_record.confidence = 0.92
 
     from libris.config import (
-        CalibreConfig, Config, MetadataConfig, NtfyConfig, OutputConfig,
-        PathsConfig, WatcherConfig,
+        CalibreConfig,
+        Config,
+        MetadataConfig,
+        NtfyConfig,
+        OutputConfig,
+        PathsConfig,
+        WatcherConfig,
     )
 
     config = Config(
@@ -128,7 +131,7 @@ def test_import_directory_combined_calls_handle_pending_part_correctly(tmp_path)
     pipeline = Pipeline(config)
 
     # Track calls to _handle_pending_part
-    staged_calls: List[tuple] = []
+    staged_calls: list[tuple] = []
 
     def fake_handle_pending_part(path, record, part_num, total_parts):
         staged_calls.append((path.name, part_num, total_parts))
@@ -172,8 +175,13 @@ def test_import_directory_combined_raises_on_empty_dir(tmp_path):
     empty_dir.mkdir()
 
     from libris.config import (
-        CalibreConfig, Config, MetadataConfig, NtfyConfig, OutputConfig,
-        PathsConfig, WatcherConfig,
+        CalibreConfig,
+        Config,
+        MetadataConfig,
+        NtfyConfig,
+        OutputConfig,
+        PathsConfig,
+        WatcherConfig,
     )
 
     config = Config(

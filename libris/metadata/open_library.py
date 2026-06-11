@@ -9,12 +9,11 @@ Search: https://openlibrary.org/search.json?title=...&author=...&limit=5
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 
 from ..exceptions import RateLimitError
-from .base import BookCandidate, SearchQuery, ScoredCandidate
+from .base import BookCandidate, ScoredCandidate, SearchQuery
 from .scorer import score_candidate
 
 log = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ _TIMEOUT = 10.0
 
 def fetch(
     query: SearchQuery,
-    client: Optional[httpx.Client] = None,
+    client: httpx.Client | None = None,
 ) -> list[ScoredCandidate]:
     """Fetch candidates from OpenLibrary and return scored results.
 
@@ -59,7 +58,7 @@ def fetch(
     return [score_candidate(query, c) for c in candidates]
 
 
-def _parse_retry_after(response: httpx.Response) -> Optional[int]:
+def _parse_retry_after(response: httpx.Response) -> int | None:
     """Return the Retry-After header value in seconds, or None if absent/unparseable."""
     header = response.headers.get("retry-after") or response.headers.get("Retry-After")
     if header:
@@ -97,7 +96,7 @@ def _parse_response(data: dict) -> list[BookCandidate]:
         isbn_10 = next((i for i in isbns if len(i) == 10), None)
 
         year_raw = doc.get("first_publish_year")
-        year: Optional[int] = int(year_raw) if year_raw else None
+        year: int | None = int(year_raw) if year_raw else None
 
         publishers = doc.get("publisher") or []
         publisher = publishers[0] if publishers else None

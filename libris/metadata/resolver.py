@@ -8,7 +8,6 @@ import os
 import re
 import signal
 from pathlib import Path
-from typing import Optional
 
 import httpx
 
@@ -55,7 +54,7 @@ signal.signal(signal.SIGTERM, _sigterm_handler)
 def resolve_metadata(
     filename: str,
     config: MetadataConfig,
-    client: Optional[httpx.Client] = None,
+    client: httpx.Client | None = None,
     embed_cover: bool = True,
 ) -> MetadataResult:
     """Resolve book metadata from a filename.
@@ -209,7 +208,7 @@ def resolve_metadata(
     return result
 
 
-def _download_cover(url: str, client: httpx.Client) -> Optional[Path]:
+def _download_cover(url: str, client: httpx.Client) -> Path | None:
     """Download cover image to a temp file. Returns path or None on failure.
 
     The temp file path is registered in ``_pending_cover_paths`` so the atexit /
@@ -217,7 +216,7 @@ def _download_cover(url: str, client: httpx.Client) -> Optional[Path]:
     removes the file via ``cover_path.unlink()``.
     """
     import tempfile
-    cover_path: Optional[Path] = None
+    cover_path: Path | None = None
     try:
         response = client.get(url, timeout=10.0, follow_redirects=True)
         response.raise_for_status()
@@ -277,13 +276,13 @@ def _mock_fetch(query: SearchQuery):  # type: ignore[return]
 # Filename hint extractors
 # ---------------------------------------------------------------------------
 
-def _extract_year(stem: str) -> Optional[int]:
+def _extract_year(stem: str) -> int | None:
     """Extract a 4-digit year from the stem (first match in range 1800–2099)."""
     m = re.search(r"\b(1[89]\d{2}|20\d{2})\b", stem)
     return int(m.group(1)) if m else None
 
 
-def _extract_author_hint(stem: str) -> Optional[str]:
+def _extract_author_hint(stem: str) -> str | None:
     """Heuristic: if stem contains ' - Author Name', extract the part after ' - '.
 
     Rules for a valid author candidate:
@@ -314,9 +313,7 @@ def _extract_author_hint(stem: str) -> Optional[str]:
             return False
         if not all(t[0].isupper() for t in tokens if t):
             return False
-        if any(t.lower() in _NOISE_WORDS for t in tokens):
-            return False
-        return True
+        return not any(t.lower() in _NOISE_WORDS for t in tokens)
 
     # Convention is almost always "Title - Author Name", so check the part
     # after the dash first.  Fall back to the first part for the rarer
@@ -342,7 +339,7 @@ _SERIES_PREFIX = re.compile(
 )
 
 
-def _extract_series(stem: str) -> tuple[Optional[str], Optional[float]]:
+def _extract_series(stem: str) -> tuple[str | None, float | None]:
     """Extract series name and index from a filename stem.
 
     Handles the two most common patterns:

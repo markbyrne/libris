@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
 
 import httpx
 
@@ -32,7 +31,7 @@ _ABSTRACT_AUTHOR_RE = re.compile(
 
 def search_book_hints(
     title: str,
-    client: Optional[httpx.Client] = None,
+    client: httpx.Client | None = None,
 ) -> dict[str, str]:
     """Query DDG Instant Answers for author/ISBN/year hints for a book title.
 

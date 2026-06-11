@@ -14,11 +14,9 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 from rapidfuzz import fuzz as _fuzz
 
@@ -30,9 +28,9 @@ from .classifier import EBOOK_EXTENSIONS, Classifier, MediaType
 from .cleaner import clean_query, extract_part, is_chaff, strip_part_marker
 from .config import Config
 from .ebook import converter as ebook_conv
-from .exceptions import BookPipelineError, ClassificationError
+from .exceptions import BookPipelineError
 from .metadata import resolve_metadata
-from .metadata.base import MetadataResult, SearchQuery
+from .metadata.base import BookCandidate, MetadataResult, ScoredCandidate, SearchQuery
 from .notifier import Notifier
 from .state import FileRecord, FileState, StateStore
 from .watcher import FileEvent, get_watcher
@@ -44,13 +42,12 @@ log = logging.getLogger(__name__)
 # Metadata serialisation helpers
 # ---------------------------------------------------------------------------
 
-def _serialize_candidate(scored: "ScoredCandidate") -> str:
+def _serialize_candidate(scored: ScoredCandidate) -> str:
     """Serialise a ScoredCandidate to a JSON string for storage.
 
     raw_response is intentionally omitted — it can be large and we only need
     the fields required to reconstruct a MetadataResult for import.
     """
-    from .metadata.base import ScoredCandidate  # local import avoids circular
     c = scored.candidate
     return json.dumps({
         "title": c.title,
@@ -71,9 +68,8 @@ def _serialize_candidate(scored: "ScoredCandidate") -> str:
     }, ensure_ascii=False)
 
 
-def _deserialize_candidate(blob: str) -> "ScoredCandidate":
+def _deserialize_candidate(blob: str) -> ScoredCandidate:
     """Reconstruct a ScoredCandidate from a stored JSON string."""
-    from .metadata.base import BookCandidate, ScoredCandidate
     d = json.loads(blob)
     candidate = BookCandidate(
         title=d["title"],
@@ -97,7 +93,7 @@ def _deserialize_candidate(blob: str) -> "ScoredCandidate":
     )
 
 
-def _add_book_args(result: MetadataResult) -> dict[str, Optional[str]]:
+def _add_book_args(result: MetadataResult) -> dict[str, str | None]:
     """Resolved title/authors kwargs for CalibreBackend.add_book.
 
     These become calibredb add's --title/--authors flags and determine the
@@ -364,7 +360,7 @@ class Pipeline:
             log.exception("pipeline.force_import_failed", extra={"path": str(path)})
             return self._mark_failed(record, exc)
 
-    def import_from_record(self, record: "FileRecord") -> "FileRecord":
+    def import_from_record(self, record: FileRecord) -> FileRecord:
         """Import a review-queue file using its persisted metadata (no API call).
 
         Reconstructs the MetadataResult from the JSON stored when the file
@@ -388,6 +384,7 @@ class Pipeline:
         cover_path = None
         if self.config.output.embed_cover_art and scored.candidate.cover_url:
             import httpx
+
             from .metadata.resolver import _download_cover
             with httpx.Client(timeout=12.0) as client:
                 cover_path = _download_cover(scored.candidate.cover_url, client)
@@ -538,7 +535,7 @@ class Pipeline:
         path: Path,
         record: FileRecord,
         part_num: int,
-        total_parts: Optional[int],
+        total_parts: int | None,
     ) -> FileRecord:
         """Stage a single part file and combine+import when the set is complete.
 
@@ -654,7 +651,8 @@ class Pipeline:
         are moved to review/ with an error message so the user can decide whether
         to force-combine or wait for the missing parts.
         """
-        from datetime import timedelta, datetime, timezone as _tz
+        from datetime import datetime, timedelta
+        from datetime import timezone as _tz
         timeout = timedelta(hours=self.config.multipart.timeout_hours)
         now = datetime.now(_tz.utc)
 
@@ -803,7 +801,7 @@ class Pipeline:
                 )
                 try:
                     last_record = self.import_directory_combined(dir_path)
-                except (BookPipelineError, ValueError) as exc:
+                except (BookPipelineError, ValueError):
                     log.exception("pipeline.audio.folder_parts_failed",
                                   extra={"dir": str(dir_path)})
 
@@ -892,7 +890,7 @@ class Pipeline:
             extra={"folder": folder.name, "parts": total_parts, "group": group_key},
         )
 
-        last_record: Optional[FileRecord] = None
+        last_record: FileRecord | None = None
         for idx, audio_path in enumerate(audio_files, start=1):
             file_record = self._get_or_create_record(audio_path, "audiobook")
 
@@ -1085,7 +1083,7 @@ class Pipeline:
         record: FileRecord,
         processed_path: Path,
         original_path: Path,
-        result: Optional[MetadataResult],
+        result: MetadataResult | None,
     ) -> FileRecord:
         """Mark IMPORTED and delete the original source file."""
         # Delete staging copy if different from original
@@ -1205,7 +1203,7 @@ class Pipeline:
         record: FileRecord,
         result: MetadataResult,
         file_path: Path,
-    ) -> Optional[FileRecord]:
+    ) -> FileRecord | None:
         """Check for duplicates and act on them per config.
 
         If the incoming file's format is not already stored in the matching

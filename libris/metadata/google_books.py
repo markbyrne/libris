@@ -9,14 +9,12 @@ API docs: https://developers.google.com/books/docs/v1/using
 from __future__ import annotations
 
 import logging
-from typing import Optional
-
 import re
 
 import httpx
 
 from ..exceptions import RateLimitError
-from .base import BookCandidate, SearchQuery, ScoredCandidate
+from .base import BookCandidate, ScoredCandidate, SearchQuery
 from .scorer import score_candidate
 
 # Patterns for series embedded in book titles
@@ -37,8 +35,8 @@ _TIMEOUT = 10.0
 
 def fetch(
     query: SearchQuery,
-    api_key: Optional[str] = None,
-    client: Optional[httpx.Client] = None,
+    api_key: str | None = None,
+    client: httpx.Client | None = None,
 ) -> list[ScoredCandidate]:
     """Fetch candidates from Google Books and return scored results.
 
@@ -84,7 +82,7 @@ def fetch(
     return [score_candidate(query, c) for c in candidates]
 
 
-def _rate_limit_reason(response: httpx.Response) -> Optional[str]:
+def _rate_limit_reason(response: httpx.Response) -> str | None:
     """Return the rate-limit reason string if the response indicates throttling, else None.
 
     Google Books uses both HTTP 429 and HTTP 403 for quota errors.  The reason
@@ -117,7 +115,7 @@ def _rate_limit_reason(response: httpx.Response) -> Optional[str]:
     return None
 
 
-def _parse_retry_after(response: httpx.Response) -> Optional[int]:
+def _parse_retry_after(response: httpx.Response) -> int | None:
     """Return the Retry-After header value in seconds, or None if absent/unparseable."""
     header = response.headers.get("retry-after") or response.headers.get("Retry-After")
     if header:
@@ -154,7 +152,7 @@ def _parse_response(data: dict) -> list[BookCandidate]:
                 isbn_10 = identifier.get("identifier")
 
         year_raw = info.get("publishedDate", "")
-        year: Optional[int] = None
+        year: int | None = None
         if year_raw and len(year_raw) >= 4 and year_raw[:4].isdigit():
             year = int(year_raw[:4])
 
@@ -174,8 +172,8 @@ def _parse_response(data: dict) -> list[BookCandidate]:
 
         # Extract series from title or subtitle
         # e.g. "Eragon (Inheritance Cycle, #1)" → title="Eragon", series="Inheritance Cycle"
-        series: Optional[str] = None
-        series_index: Optional[float] = None
+        series: str | None = None
+        series_index: float | None = None
         subtitle = info.get("subtitle", "")
         clean_title = title
 

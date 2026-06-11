@@ -230,7 +230,8 @@ calibre:
         """When both library_db_path and book_file_path are set, effective_book_path = book_file_path."""
         lib = tmp_path / "calibre-db"
         books = tmp_path / "books"
-        lib.mkdir(); books.mkdir()
+        lib.mkdir()
+        books.mkdir()
         p = self._write_config(tmp_path, f"""
 watcher:
   incoming_dir: {tmp_path}/incoming
@@ -269,7 +270,8 @@ calibre:
         """library_db_path takes precedence over library_path when both are in YAML."""
         lib_new = tmp_path / "new-lib"
         lib_old = tmp_path / "old-lib"
-        lib_new.mkdir(); lib_old.mkdir()
+        lib_new.mkdir()
+        lib_old.mkdir()
         p = self._write_config(tmp_path, f"""
 watcher:
   incoming_dir: {tmp_path}/incoming

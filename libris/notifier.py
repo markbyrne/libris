@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import httpx
 
@@ -75,7 +74,6 @@ class Notifier:
         if not self._config.enabled or not self._config.topic:
             return
         filename = Path(record.current_path).name
-        received = 1  # at least the part we just stored
         total = record.total_parts or "?"
         self._post(
             title=f"⏳ Part {record.part_num} of {total} received",
@@ -88,7 +86,7 @@ class Notifier:
             tags=["books", "hourglass_flowing_sand"],
         )
 
-    def send_imported_alert(self, record: FileRecord, result: Optional[MetadataResult]) -> None:
+    def send_imported_alert(self, record: FileRecord, result: MetadataResult | None) -> None:
         """Notify of a successful import (optional; keeps ntfy noise low)."""
         if not self._config.enabled or not self._config.topic:
             return
@@ -111,7 +109,7 @@ class Notifier:
         title: str,
         body: str,
         priority: str = "default",
-        tags: Optional[list[str]] = None,
+        tags: list[str] | None = None,
     ) -> None:
         """POST to ntfy.sh. Swallows all exceptions."""
         url = f"{self._config.base_url.rstrip('/')}/{self._config.topic}"

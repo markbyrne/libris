@@ -48,7 +48,11 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+ignore = [
+    "E501",    # line length — long URLs/regexes allowed
+    "SIM105",  # try/except/pass is clearer than contextlib.suppress at these call sites
+    "SIM117",  # nested `with patch(...)` blocks are idiomatic in the test suite
+]
 
 [tool.mypy]
 python_version = "3.10"

@@ -14,7 +14,6 @@ Path translation:
 from __future__ import annotations
 
 import logging
-import re
 import subprocess
 from pathlib import Path
 
@@ -22,7 +21,13 @@ from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
 from .base import CalibreBackend
-from .local import _BOOK_EXTENSIONS, _metadata_flags, _normalise_book_entry, _parse_book_id, _parse_formats
+from .local import (
+    _BOOK_EXTENSIONS,
+    _metadata_flags,
+    _normalise_book_entry,
+    _parse_book_id,
+    _parse_formats,
+)
 
 log = logging.getLogger(__name__)
 

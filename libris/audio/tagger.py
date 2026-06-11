@@ -6,7 +6,6 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from ..exceptions import ConversionError
 from ..metadata.base import MetadataResult
@@ -18,7 +17,7 @@ def embed_metadata(
     audio_path: Path,
     result: MetadataResult,
     overwrite: bool = True,
-    cover_path: Optional[Path] = None,
+    cover_path: Path | None = None,
 ) -> None:
     """Embed title, author, year, and all available metadata into an M4B in-place.
 
@@ -77,7 +76,7 @@ def _build_ffmpeg_cmd(
     input_path: Path,
     output_path: Path,
     result: MetadataResult,
-    cover_path: Optional[Path],
+    cover_path: Path | None,
 ) -> list[str]:
     """Build the ffmpeg command to embed metadata and optional cover art."""
     has_cover = cover_path is not None and cover_path.exists()

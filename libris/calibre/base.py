@@ -5,8 +5,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from typing import Optional
-
 from ..metadata.base import MetadataResult
 
 
@@ -26,8 +24,8 @@ class CalibreBackend(ABC):
     def add_book(
         self,
         file_path: Path,
-        title: Optional[str] = None,
-        authors: Optional[str] = None,
+        title: str | None = None,
+        authors: str | None = None,
     ) -> int:
         """Import a file into the Calibre library.
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -13,15 +12,15 @@ class BookCandidate:
 
     title: str
     authors: list[str]
-    isbn_13: Optional[str] = None
-    isbn_10: Optional[str] = None
-    published_year: Optional[int] = None
-    publisher: Optional[str] = None
-    description: Optional[str] = None      # synopsis / back-cover text
-    language: Optional[str] = None         # ISO 639-1 code e.g. "en"
-    series: Optional[str] = None           # series name
-    series_index: Optional[float] = None   # position in series
-    cover_url: Optional[str] = None        # remote URL for cover image
+    isbn_13: str | None = None
+    isbn_10: str | None = None
+    published_year: int | None = None
+    publisher: str | None = None
+    description: str | None = None      # synopsis / back-cover text
+    language: str | None = None         # ISO 639-1 code e.g. "en"
+    series: str | None = None           # series name
+    series_index: float | None = None   # position in series
+    cover_url: str | None = None        # remote URL for cover image
     categories: list[str] = field(default_factory=list)
     source: str = ""                       # "google_books" | "open_library"
     raw_response: dict = field(default_factory=dict, repr=False)
@@ -32,7 +31,7 @@ class BookCandidate:
         return [a.split()[-1].lower() for a in self.authors if a.strip()]
 
     @property
-    def isbn(self) -> Optional[str]:
+    def isbn(self) -> str | None:
         """Return ISBN-13 if available, else ISBN-10."""
         return self.isbn_13 or self.isbn_10
 
@@ -42,11 +41,11 @@ class SearchQuery:
     """Cleaned query to send to metadata sources."""
 
     clean_title: str
-    author_hint: Optional[str] = None       # may be None if not parseable from filename
-    isbn: Optional[str] = None              # extracted from filename, if any
-    year_hint: Optional[int] = None         # extracted from filename, if any
-    series_hint: Optional[str] = None       # extracted from filename, if any
-    series_index_hint: Optional[float] = None  # extracted from filename, if any
+    author_hint: str | None = None       # may be None if not parseable from filename
+    isbn: str | None = None              # extracted from filename, if any
+    year_hint: int | None = None         # extracted from filename, if any
+    series_hint: str | None = None       # extracted from filename, if any
+    series_index_hint: float | None = None  # extracted from filename, if any
 
 
 @dataclass
@@ -69,10 +68,10 @@ class MetadataResult:
     """Final resolved metadata for a file, ready to drive import decisions."""
 
     query: SearchQuery
-    best: Optional[ScoredCandidate]
+    best: ScoredCandidate | None
     all_candidates: list[ScoredCandidate] = field(default_factory=list)
     above_threshold: bool = False
-    cover_path: Optional[Path] = None      # downloaded cover image (temp file)
+    cover_path: Path | None = None      # downloaded cover image (temp file)
 
     # ── Convenience accessors ─────────────────────────────────────────────────
 
@@ -105,15 +104,15 @@ class MetadataResult:
         return self.best.candidate.language or "" if self.best else ""
 
     @property
-    def series(self) -> Optional[str]:
+    def series(self) -> str | None:
         return self.best.candidate.series if self.best else None
 
     @property
-    def series_index(self) -> Optional[float]:
+    def series_index(self) -> float | None:
         return self.best.candidate.series_index if self.best else None
 
     @property
-    def isbn(self) -> Optional[str]:
+    def isbn(self) -> str | None:
         return self.best.candidate.isbn if self.best else None
 
     @property
