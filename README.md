@@ -901,20 +901,29 @@ libris revert-import --search "Caliban"
 
 ---
 
-### `clean-library` — deduplicate and fix Unknown books
+### `clean-library` — deduplicate, fix Unknown books, reconcile DB against disk
 
-Scans the Calibre library in two passes:
+Scans the Calibre library in four passes:
 
 1. **Dedup** — groups books by title + author; for each group with more than one entry, merges all formats into the first (lowest-ID) book and removes the extras.
 
 2. **Unknown** — finds books whose title or every author is `Unknown`; exports the file(s) and drops them into `incoming/` so the normal pipeline can re-match and import them with correct metadata.
 
+3. **Missing files** — finds Calibre entries whose book files no longer exist on disk (e.g. files moved or deleted by hand) and removes the dead entries from the database. This pass always asks for confirmation before removing anything; pass `--yes` to skip the prompt. Entries that still have at least one format on disk are never removed — a missing format is just reported.
+
+4. **Orphan files** — finds book files in the library tree that no Calibre entry points to and moves them to `review/`, where `libris list-review` / `libris rematch` / `libris review-accept` handle re-import. Calibre's internal files (`metadata.db`, covers, `.caltrash`) are ignored.
+
+Passes 3 and 4 require `calibre.mode: local` — in docker mode the library paths are inside the container and cannot be checked from the host. In split-library mode (`book_file_path` set), files are checked at the book-files location, and a file stranded at the metadata.db location (e.g. by a crash between add and relocation) still counts as present.
+
 ```bash
 # Preview what will change (safe — no modifications)
 libris clean-library --dry-run
 
-# Apply
+# Apply (prompts before removing missing-file entries)
 libris clean-library
+
+# Apply without the pass-3 confirmation prompt
+libris clean-library --yes
 libris run              # re-imports anything moved to incoming/
 ```
 
@@ -933,6 +942,16 @@ Example output:
        → incoming/Unknown.epub
 
   1 book(s) moved to incoming/. Run 'libris run' to re-import them.
+
+  ── Pass 3: Missing files ──
+    book 21 ('Old Title' by Some Author) — no files on disk
+
+  Remove 1 Calibre entr(y/ies) with no files on disk? [y/N]: y
+       removed book 21
+
+  ── Pass 4: Orphan files ──
+    orphan Unknown/Stray Book (37)/Stray Book.m4b → review/Stray Book.m4b
+  1 orphan file(s) moved to review/. Run 'libris list-review' to triage, 'libris rematch' to match them.
 ```
 
 ---

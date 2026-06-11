@@ -568,7 +568,9 @@ def _normalise_book_entry(raw: dict) -> dict:
       - authors: str "Andy Weir" | list ["Andy Weir"]
       - formats: str "/path/book.epub" | list ["/path/book.epub"]
     Returns a consistent dict with id (int), title (str), authors (list[str]),
-    formats (list[str] of lowercase extensions, no leading dot).
+    formats (list[str] of lowercase extensions, no leading dot), and
+    format_paths (list[str] of absolute paths as calibredb reports them —
+    under the metadata.db location, even in split-library mode).
     """
     # authors: comma-separated string or list
     raw_authors = raw.get("authors", "")
@@ -593,6 +595,7 @@ def _normalise_book_entry(raw: dict) -> dict:
         "title": str(raw.get("title", "")),
         "authors": authors,
         "formats": exts,
+        "format_paths": [str(p) for p in fmt_paths if p],
     }
 
 
