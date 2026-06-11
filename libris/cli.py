@@ -43,6 +43,7 @@ import click
 import httpx
 
 from .calibre import get_calibre
+from .classifier import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
 from .cleaner import clean_query as _clean_query, is_chaff as _is_chaff, strip_part_marker as _strip_part_marker
 from .config import load_config
 from .exceptions import ConfigError, RateLimitError
@@ -50,7 +51,13 @@ from .metadata.base import MetadataResult, SearchQuery
 from .metadata.resolver import _extract_author_hint, _extract_year, _extract_series, _SERIES_PREFIX
 from .metadata.scorer import dedup_candidates, score_candidate
 from .pipeline import Pipeline
-from .state import FileState, StateStore
+from .state import FileRecord, FileState, StateStore
+
+# Dot-prefixed book-format extensions, for Path.suffix comparison when
+# scanning the library tree for orphan files (clean-library pass 4).
+_LIBRARY_BOOK_EXTENSIONS: frozenset[str] = frozenset(
+    f".{ext}" for ext in (*EBOOK_EXTENSIONS, *AUDIO_EXTENSIONS)
+)
 
 log = logging.getLogger(__name__)
 
@@ -2747,12 +2754,14 @@ def reset(config_path: Optional[Path]) -> None:
 @main.command("clean-library")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Show what would happen without making any changes")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip the confirmation prompt before removing entries whose files are missing")
 @_CONFIG_OPTION
-def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
-    """Deduplicate Calibre and re-queue Unknown-metadata books.
+def clean_library(dry_run: bool, yes: bool, config_path: Optional[Path]) -> None:
+    """Deduplicate, re-queue Unknown books, and reconcile DB against disk.
 
     \b
-    Two passes over the library:
+    Four passes over the library:
 
     1.  Dedup — groups books by normalised title + author surname; for each
         group with more than one entry, merges all formats into the lowest-ID
@@ -2761,6 +2770,15 @@ def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
     2.  Unknown — finds books whose title or every author is 'Unknown';
         exports the file(s), drops them into incoming/ for the normal
         import pipeline to re-match, and removes the Calibre entry.
+
+    3.  Missing files — finds Calibre entries whose files no longer exist on
+        disk and removes them after confirmation (--yes to skip the prompt).
+
+    4.  Orphan files — finds book files on disk that no Calibre entry points
+        to and moves them to review/ for re-import.
+
+    Passes 3 and 4 require calibre.mode: local — in docker mode the library
+    paths are inside the container and cannot be checked from the host.
 
     \b
     Run without flags first to preview what will change:
@@ -2781,14 +2799,15 @@ def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
     incoming = config.watcher.incoming_dir
 
     books = calibre.list_books()
-    if not books:
-        click.echo("\n  Calibre library is empty.\n")
-        store.close()
-        return
-
     tag = click.style("[dry-run]", fg="cyan") + " " if dry_run else ""
 
-    click.echo(f"\n  {len(books)} book(s) in Calibre library\n")
+    # No early return on an empty library: passes 1-2 are no-ops then, but
+    # pass 4 must still run — files on disk with no DB entry at all is the
+    # most extreme orphan case.
+    if not books:
+        click.echo("\n  Calibre library has no DB entries.\n")
+    else:
+        click.echo(f"\n  {len(books)} book(s) in Calibre library\n")
 
     # ── Pass 1: Dedup ────────────────────────────────────────────────────────
     click.echo(click.style("  ── Pass 1: Dedup ──", bold=True))
@@ -2926,8 +2945,151 @@ def clean_library(dry_run: bool, config_path: Optional[Path]) -> None:
                 fg="green",
             )
         )
-    click.echo()
 
+    # ── Passes 3 & 4: reconcile DB against the filesystem ───────────────────
+    if config.calibre.mode != "local" or not config.calibre.library_db_path:
+        click.echo()
+        click.echo(click.style("  ── Pass 3+4: filesystem reconciliation ──", bold=True))
+        click.echo(
+            "  Skipped — requires calibre.mode: local "
+            "(docker library paths are not visible from the host)."
+        )
+    else:
+        lib_root = config.calibre.library_db_path.expanduser()
+        book_root = (config.calibre.effective_book_path or lib_root).expanduser()
+
+        def _candidate_paths(fmt_path: str) -> list[Path]:
+            """Where a calibredb-reported format path may really live.
+
+            calibredb reports paths under lib_root (the metadata.db location).
+            In split-library mode the file normally lives at the same relative
+            path under book_root — but a crash between add and relocation can
+            leave it under lib_root, so both locations count as present.
+            """
+            p = Path(fmt_path)
+            try:
+                rel = p.relative_to(lib_root)
+            except ValueError:
+                return [p]
+            mapped = book_root / rel
+            return [mapped, p] if mapped != p else [p]
+
+        # Passes 1-2 may have removed entries — re-list for an accurate view
+        books = calibre.list_books()
+
+        # ── Pass 3: entries whose files are gone ────────────────────────────
+        click.echo()
+        click.echo(click.style("  ── Pass 3: Missing files ──", bold=True))
+
+        missing_entries: list[dict] = []
+        for b in books:
+            candidates = [_candidate_paths(fp) for fp in b.get("format_paths", [])]
+            if not candidates:
+                continue  # entry has no formats — nothing to verify
+            present = [c for c in candidates if any(p.exists() for p in c)]
+            if not present:
+                missing_entries.append(b)
+            elif len(present) < len(candidates):
+                gone = [c[0].name for c in candidates if not any(p.exists() for p in c)]
+                click.echo(click.style(
+                    f"  ⚠ book {b['id']} ({b['title']!r}) missing format(s): "
+                    f"{', '.join(gone)} — other formats still on disk, leaving entry",
+                    fg="yellow",
+                ))
+
+        if not missing_entries:
+            click.echo("  All Calibre entries have their files on disk.")
+        else:
+            for b in missing_entries:
+                click.echo(
+                    f"  {tag}  book {b['id']} ({b['title']!r} by "
+                    f"{', '.join(b['authors']) or 'unknown'}) — no files on disk"
+                )
+            if dry_run:
+                click.echo(f"  Would prompt to remove {len(missing_entries)} entr(y/ies).")
+            elif yes or click.confirm(
+                f"\n  Remove {len(missing_entries)} Calibre entr(y/ies) with no files on disk?"
+            ):
+                for b in missing_entries:
+                    try:
+                        calibre.remove_book(b["id"])
+                        store.delete_by_calibre_id(b["id"])
+                        click.echo(f"       removed book {b['id']}")
+                    except Exception as exc:
+                        click.echo(
+                            click.style(f"       ⚠ remove failed: {exc}", fg="yellow"),
+                            err=True,
+                        )
+            else:
+                click.echo("  Skipped — entries left in place.")
+
+        # ── Pass 4: files on disk no entry points to ────────────────────────
+        click.echo()
+        click.echo(click.style("  ── Pass 4: Orphan files ──", bold=True))
+
+        known: set[Path] = set()
+        for b in calibre.list_books():  # re-list: pass 3 may have removed entries
+            for fp in b.get("format_paths", []):
+                for p in _candidate_paths(fp):
+                    known.add(p)
+
+        orphans: list[Path] = []
+        if book_root.is_dir():
+            for f in sorted(book_root.rglob("*")):
+                if not f.is_file() or f.suffix.lower() not in _LIBRARY_BOOK_EXTENSIONS:
+                    continue
+                rel_parts = f.relative_to(book_root).parts
+                if any(part.startswith(".") for part in rel_parts):
+                    continue  # .caltrash, .calnotes, other hidden dirs
+                if f not in known:
+                    orphans.append(f)
+
+        if not orphans:
+            click.echo("  No orphan files found.")
+        else:
+            review_dir = config.paths.review_dir
+            review_dir.mkdir(parents=True, exist_ok=True)
+            moved_orphans = 0
+            for f in orphans:
+                dest = review_dir / f.name
+                if dest.exists():
+                    dest = review_dir / f"{f.stem}_orphan{f.suffix}"
+                click.echo(f"  {tag}  orphan {f.relative_to(book_root)} → review/{dest.name}")
+                if dry_run:
+                    continue
+                try:
+                    shutil.move(str(f), dest)
+                    ext = f.suffix.lstrip(".").lower()
+                    record = FileRecord(
+                        id=FileRecord.make_id(dest),
+                        original_path=str(f),
+                        current_path=str(dest),
+                        media_type="audiobook" if ext in AUDIO_EXTENSIONS else "ebook",
+                        state=FileState.REVIEW,
+                        error_msg="Orphan: file was in the library with no Calibre entry",
+                    )
+                    store.upsert(record)
+                    moved_orphans += 1
+                    # Clean up now-empty directories left behind
+                    parent = f.parent
+                    while parent != book_root and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
+                except Exception as exc:
+                    click.echo(
+                        click.style(f"       ⚠ move failed: {exc}", fg="yellow"),
+                        err=True,
+                    )
+            if dry_run:
+                click.echo(f"  Would move {len(orphans)} orphan file(s) to review/.")
+            elif moved_orphans:
+                click.echo(click.style(
+                    f"  {moved_orphans} orphan file(s) moved to review/. "
+                    "Run 'libris list-review' to triage, 'libris rematch' to match them.",
+                    fg="green",
+                ))
+
+    click.echo()
     store.close()
 
 
