@@ -221,6 +221,23 @@ _PART_COMPACT_DISC = re.compile(
     r'\b(?:disc|disk|cd)(\d+)(?:-\d+)?\b',
     re.IGNORECASE,
 )
+# Trailing "-NN-NN" pair with no keyword: "Title-01-46" → part 1 of 46.
+# The (?<![\d-]) lookbehind rejects trailing dates ("Show-2024-12-25" would
+# otherwise match "-12-25").  Matches must also pass _valid_trailing_pair —
+# the regex alone cannot enforce part <= total.
+_PART_TRAILING_PAIR = re.compile(
+    r'(?<![\d-])-(\d{1,3})-(\d{1,3})\s*$',
+)
+
+
+def _valid_trailing_pair(part: int, total: int) -> bool:
+    """A bare trailing pair only counts as a part marker when it is plausible.
+
+    Requires 1 <= part <= total and total >= 2: "Title-46-01" is more likely
+    a series/volume code than part 46 of 1, and "Title-1-1" more likely series
+    notation than a one-part set (which imports fine as a standalone file).
+    """
+    return 1 <= part <= total and total >= 2
 
 # Strips all of the above from a filename stem
 _PART_STRIP_PATTERNS = (
@@ -259,6 +276,14 @@ def extract_part(raw: str) -> tuple[Optional[int], Optional[int]]:
             except (ValueError, IndexError):
                 pass
 
+    # Bare trailing "-NN-NN" pair (also carries a total, but needs the
+    # plausibility check, so it sits below the explicit keyword patterns)
+    m = _PART_TRAILING_PAIR.search(raw)
+    if m:
+        part, total = int(m.group(1)), int(m.group(2))
+        if _valid_trailing_pair(part, total):
+            return part, total
+
     # Lone part number (no total known)
     for pat in (_PART_LONE_PAREN, _PART_LONE_BARE, _PART_PAREN_BARE, _PART_COMPACT_DISC):
         m = pat.search(raw)
@@ -283,6 +308,12 @@ def strip_part_marker(raw: str) -> str:
       "Eragon"                         → "Eragon"
     """
     result = raw
+    # Trailing pair is stripped only when it passes the same plausibility
+    # check extract_part applies — an implausible pair ("Title-46-01") is
+    # part of the title and must survive as the group key.
+    m = _PART_TRAILING_PAIR.search(result)
+    if m and _valid_trailing_pair(int(m.group(1)), int(m.group(2))):
+        result = result[:m.start()]
     for pat in _PART_STRIP_PATTERNS:
         result = pat.sub("", result)
     # Collapse extra spaces and trailing/leading punctuation

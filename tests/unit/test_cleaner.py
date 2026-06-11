@@ -89,6 +89,17 @@ def test_clean_query_all_noise():
     ("Some Book (2021)",             (None, None)),   # 4-digit year
     ("Title Part One (2021)",        (None, None)),   # year mid-stem
     ("A Book (999) Extra Text",      (None, None)),   # not end-anchored
+    # ── NEW: bare trailing "-NN-NN" pair (issue #59) ─────────────────────
+    ("Title-01-46",                  (1, 46)),
+    ("Title-46-46",                  (46, 46)),
+    ("Title-2-12",                   (2, 12)),        # unpadded
+    ("Merchant of Death-01-46",      (1, 46)),
+    # plausibility guards — must NOT match
+    ("Title-46-01",                  (None, None)),   # part > total
+    ("Title-1-1",                    (None, None)),   # total < 2
+    ("Show-2024-12-25",              (None, None)),   # trailing date
+    ("Catch-22-01-46",               (None, None)),   # digit before pair (conservative)
+    ("Title-01-46 Extra",            (None, None)),   # not end-anchored
 ])
 def test_extract_part(raw, expected):
     assert extract_part(raw) == expected
@@ -102,6 +113,11 @@ def test_extract_part(raw, expected):
     ("Book Title (1 of 3)",           "Book Title"),
     ("Book Title (2/3)",              "Book Title"),
     ("Eragon",                        "Eragon"),
+    # NEW: bare trailing "-NN-NN" pair (issue #59)
+    ("Title-01-46",                   "Title"),
+    ("Merchant of Death-13-46",       "Merchant of Death"),
+    # implausible pair is part of the title — must survive
+    ("Title-46-01",                   "Title-46-01"),
 ])
 def test_strip_part_marker(raw, expected):
     assert strip_part_marker(raw) == expected

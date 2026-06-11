@@ -40,3 +40,4 @@ MEMORY.md
 .idea/
 *.swp
 *.swo
+uv.lock
