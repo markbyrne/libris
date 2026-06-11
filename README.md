@@ -1040,8 +1040,11 @@ Libris detects split audiobooks by filename pattern and holds them in staging un
 | `Eragon (1).mp3` | Part 1 (total unknown) |
 | `Book01-Merchant of Death-Disc01-001.mp3` | Part 1 (compact DiscNN form) |
 | `Book01-Merchant of Death-CD03.mp3` | Part 3 (compact CDnn form) |
+| `Title-01-46.m4b` | Part 1 of 46 (bare trailing pair) |
 
 The `part`/`disc`/`cd` keyword is optional — bare sequential numbers in parentheses at the end of a filename are also recognised. This covers the common convention of downloaders naming files `Book Title (1).mp3`, `Book Title (2).mp3`, etc.
+
+The bare trailing pair form (`Title-NN-NN`) is only treated as a part marker when it is plausible: the first number must be between 1 and the second, and the second must be at least 2. Implausible pairs (`Title-46-01`), trailing dates (`Show-2024-12-25`), and pairs directly preceded by a digit (`Catch-22-01-46`) are deliberately not matched — a missed part marker just means the file lands in `review/` where `libris mark-as-part` can fix it, whereas a false positive would hold a standalone book in staging forever waiting for parts that don't exist.
 
 When the total is known (e.g. `1 of 3`), import is triggered automatically once all parts have arrived. When the total is unknown (e.g. `(1)` only), use `libris combine-parts --id N` to import manually.
 
