@@ -88,7 +88,7 @@ bash install.sh
 
 The installer will:
 - Check and install missing system dependencies (it asks before using `sudo`)
-- Install the `libris` Python package
+- Install the `libris` Python package (from the local checkout, or the latest [PyPI release](https://pypi.org/project/pylibris/) when run standalone)
 - Create a config file at `~/.config/libris/config.yaml`
 - Offer to add `LIBRIS_CONFIG` and `~/.local/bin` (PATH) to your shell profile — both prompts can be declined
 - Optionally install a daemon service (LaunchAgent on macOS, systemd on Linux)
