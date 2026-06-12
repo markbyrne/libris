@@ -235,7 +235,7 @@ class Pipeline:
                             try:
                                 self._calibre.add_format(dup_ids[0], path)
                                 path.unlink(missing_ok=True)
-                                if self.config.output.embed_cover_art and result.cover_path:
+                                if result.cover_path:
                                     self._calibre.set_cover(dup_ids[0], result.cover_path)
                                 self._calibre.set_metadata(dup_ids[0], result)
                                 if result.cover_path:
@@ -277,7 +277,7 @@ class Pipeline:
                                 audio_tag.embed_metadata(path, result, overwrite=True)
                             self._calibre.add_format(dup_ids[0], path)
                             path.unlink(missing_ok=True)
-                            if self.config.output.embed_cover_art and result.cover_path:
+                            if result.cover_path:
                                 self._calibre.set_cover(dup_ids[0], result.cover_path)
                             self._calibre.set_metadata(dup_ids[0], result)
                             if result.cover_path:
@@ -349,7 +349,7 @@ class Pipeline:
 
             book_id = self._calibre.add_book(path, **_add_book_args(result))
             record.calibre_book_id = book_id
-            if self.config.output.embed_cover_art and result.cover_path:
+            if result.cover_path:
                 self._calibre.set_cover(book_id, result.cover_path)
             self._calibre.set_metadata(book_id, result)
 
@@ -382,7 +382,7 @@ class Pipeline:
 
         # Re-download cover from stored URL — one HTTP request, no API quota used
         cover_path = None
-        if self.config.output.embed_cover_art and scored.candidate.cover_url:
+        if scored.candidate.cover_url:
             import httpx
 
             from .metadata.resolver import _download_cover
@@ -929,7 +929,6 @@ class Pipeline:
         result = resolve_metadata(
             m4b_path.stem,
             self.config.metadata,
-            embed_cover=self.config.output.embed_cover_art,
         )
         record.matched_title = result.title
         record.matched_author = result.author
@@ -957,6 +956,7 @@ class Pipeline:
             m4b_path,
             result,
             overwrite=True,
+            cover_path=result.cover_path if self.config.output.embed_cover_art else None,
         )
 
         # ── Import ────────────────────────────────────────────────────
@@ -965,7 +965,7 @@ class Pipeline:
         log.info("pipeline.audio.imported", extra={"book_id": book_id, "title": result.title})
 
         # ── Full metadata + cover in Calibre ──────────────────────────
-        if self.config.output.embed_cover_art and result.cover_path:
+        if result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
         self._calibre.set_metadata(book_id, result)
 
@@ -1028,7 +1028,6 @@ class Pipeline:
         result = resolve_metadata(
             book_path.stem,
             self.config.metadata,
-            embed_cover=self.config.output.embed_cover_art,
         )
         record.matched_title = result.title
         record.matched_author = result.author
@@ -1064,7 +1063,7 @@ class Pipeline:
         )
 
         # ── Full metadata + cover in Calibre ──────────────────────────
-        if self.config.output.embed_cover_art and result.cover_path:
+        if result.cover_path:
             self._calibre.set_cover(book_id, result.cover_path)
         self._calibre.set_metadata(book_id, result)
 
@@ -1252,7 +1251,7 @@ class Pipeline:
                 try:
                     self._calibre.add_format(dup_ids[0], file_path)
                     file_path.unlink(missing_ok=True)
-                    if self.config.output.embed_cover_art and result.cover_path:
+                    if result.cover_path:
                         self._calibre.set_cover(dup_ids[0], result.cover_path)
                     self._calibre.set_metadata(dup_ids[0], result)
                     if result.cover_path:
@@ -1305,7 +1304,7 @@ class Pipeline:
             try:
                 self._calibre.add_format(dup_ids[0], file_path)
                 file_path.unlink(missing_ok=True)
-                if self.config.output.embed_cover_art and result.cover_path:
+                if result.cover_path:
                     self._calibre.set_cover(dup_ids[0], result.cover_path)
                 self._calibre.set_metadata(dup_ids[0], result)
                 if result.cover_path:

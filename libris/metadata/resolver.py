@@ -55,7 +55,7 @@ def resolve_metadata(
     filename: str,
     config: MetadataConfig,
     client: httpx.Client | None = None,
-    embed_cover: bool = True,
+    fetch_cover: bool = True,
 ) -> MetadataResult:
     """Resolve book metadata from a filename.
 
@@ -189,7 +189,7 @@ def resolve_metadata(
             c.series_index = query.series_index_hint
 
     # ── Download cover art ───────────────────────────────────────────────
-    if embed_cover and result.best and result.best.candidate.cover_url and not config.mock_mode:
+    if fetch_cover and result.best and result.best.candidate.cover_url and not config.mock_mode:
         _client = client or httpx.Client(timeout=12.0, headers={"User-Agent": USER_AGENT})
         result.cover_path = _download_cover(result.best.candidate.cover_url, _client)
 
