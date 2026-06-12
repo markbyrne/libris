@@ -102,12 +102,18 @@ class CalibreBackend(ABC):
         ...
 
     @abstractmethod
-    def set_cover(self, book_id: int, cover_path: Path) -> None:
+    def set_cover(self, book_id: int, cover_path: Path) -> bool:
         """Set the cover image for a Calibre book record.
 
         Args:
             book_id: Calibre book ID.
             cover_path: Local path to the cover image file.
+
+        Returns:
+            True if calibredb accepted the cover, False on any failure
+            (e.g. PermissionError writing cover.jpg into the book dir).
+            Failures are logged, never raised — but callers that report
+            per-book results (get-covers) must check the return value.
         """
         ...
 

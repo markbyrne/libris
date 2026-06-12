@@ -102,9 +102,9 @@ class DockerCalibre(CalibreBackend):
         if result_proc.returncode != 0:
             log.warning("calibre.docker.set_metadata_failed", extra={"stderr": result_proc.stderr})
 
-    def set_cover(self, book_id: int, cover_path: Path) -> None:
+    def set_cover(self, book_id: int, cover_path: Path) -> bool:
         if book_id < 0 or not cover_path.exists():
-            return
+            return False
         # --field cover: expects a path INSIDE the container.  Copy the image
         # into a container-side temp location and reference that path.
         # The OPF approach (calibredb set_metadata BOOK_ID opf) stores OPF XML
@@ -125,7 +125,7 @@ class DockerCalibre(CalibreBackend):
             )
             if cp.returncode != 0:
                 log.warning("calibre.docker.set_cover_failed: docker cp: %s", cp.stderr.strip())
-                return
+                return False
 
             cmd = [
                 "docker", "exec", self._container,
@@ -136,8 +136,9 @@ class DockerCalibre(CalibreBackend):
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 log.warning("calibre.docker.set_cover_failed: %s", result.stderr.strip())
-            else:
-                log.info("calibre.docker.cover_set", extra={"book_id": book_id})
+                return False
+            log.info("calibre.docker.cover_set", extra={"book_id": book_id})
+            return True
         finally:
             subprocess.run(
                 ["docker", "exec", self._container, "rm", "-rf", container_tmp],
