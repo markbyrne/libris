@@ -1018,6 +1018,8 @@ Book locations come from Calibre's database (`books.path`), not from `calibredb 
   2 cover(s) fetched, 1 not found
 ```
 
+If a cover is found but calibredb cannot write it (`✗ ... could not save the cover`), check the ownership and permissions of the book's directory — containerized calibre-web instances can chown library directories to a container-mapped uid that the host user cannot write into. The command exits non-zero when any save fails.
+
 ---
 
 ### `migrate-libris` — move Libris dirs and DB to a new root

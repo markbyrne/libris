@@ -3181,7 +3181,7 @@ def get_covers(dry_run: bool, config_path: Path | None) -> None:
     click.echo(f"  {len(missing)} of {len(books)} book(s) missing cover.jpg:\n")
     tag = click.style("[dry-run] ", fg="cyan") if dry_run else ""
 
-    fetched = skipped = 0
+    fetched = skipped = failed = 0
     for b in missing:
         label = f"book {b['id']} ({b['title']!r} by {', '.join(b['authors']) or 'unknown'})"
         if dry_run:
@@ -3211,9 +3211,16 @@ def get_covers(dry_run: bool, config_path: Path | None) -> None:
             continue
 
         try:
-            calibre.set_cover(b["id"], cover_path)
-            fetched += 1
-            click.echo(f"  ✓ {label}")
+            if calibre.set_cover(b["id"], cover_path):
+                fetched += 1
+                click.echo(f"  ✓ {label}")
+            else:
+                failed += 1
+                click.echo(click.style(
+                    f"  ✗ {label} — calibredb could not save the cover "
+                    "(check permissions on the book directory; see log)",
+                    fg="red",
+                ))
         finally:
             cover_path.unlink(missing_ok=True)
 
@@ -3221,12 +3228,18 @@ def get_covers(dry_run: bool, config_path: Path | None) -> None:
     if dry_run:
         click.echo(f"  Would fetch {len(missing)} cover(s).")
     else:
-        click.echo(click.style(f"  {fetched} cover(s) fetched", fg="green")
-                   + (f", {skipped} not found" if skipped else ""))
+        summary = click.style(f"  {fetched} cover(s) fetched", fg="green")
+        if skipped:
+            summary += f", {skipped} not found"
+        if failed:
+            summary += click.style(f", {failed} failed", fg="red")
+        click.echo(summary)
         if fetched:
             notify_reconnect(config.calibre.reconnect_url)
     click.echo()
     store.close()
+    if failed:
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

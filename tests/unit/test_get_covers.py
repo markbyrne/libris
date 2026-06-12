@@ -272,3 +272,53 @@ class TestCoverAlwaysSaved:
 
         pipeline._calibre.set_cover.assert_called_once_with(1, cover)
         assert embed.call_args.kwargs.get("cover_path") == cover
+
+
+class TestSetCoverFailureReporting:
+    """set_cover failures (e.g. PermissionError in the book dir) must be
+    visible: in production 13 covers reported '✓ fetched' while calibredb
+    failed every write into container-owned directories."""
+
+    def test_failed_set_cover_reported_and_exit_nonzero(self, tmp_path):
+        tree = _write_config(tmp_path)
+        book = _book_on_disk(tree, 6, "Locked Book", cover=False)
+        calibre = MagicMock()
+        calibre.list_books.return_value = [book]
+        calibre.set_cover.return_value = False   # calibredb write failed
+        store = _store_with_record("http://covers/6.jpg")
+
+        downloaded = tmp_path / "cover_tmp.jpg"
+        downloaded.write_bytes(b"img")
+
+        with patch("libris.cli._download_cover", return_value=downloaded):
+            result = _invoke(tree, calibre, store, ["get-covers"])
+
+        assert result.exit_code == 1, result.output
+        assert "could not save the cover" in result.output
+        assert "1 failed" in result.output
+        assert "0 cover(s) fetched" in result.output
+
+    def test_local_set_cover_returns_false_on_calibredb_failure(self, tmp_path):
+        from libris.calibre.local import LocalCalibre
+        from libris.config import CalibreConfig
+
+        backend = LocalCalibre(CalibreConfig(mode="local", library_db_path=tmp_path))
+        cover = tmp_path / "c.jpg"
+        cover.write_bytes(b"img")
+
+        proc = MagicMock()
+        proc.returncode = 1
+        proc.stderr = "PermissionError: [Errno 13]"
+        with patch("libris.calibre.local.subprocess.run", return_value=proc):
+            assert backend.set_cover(1, cover) is False
+
+        proc.returncode = 0
+        with patch("libris.calibre.local.subprocess.run", return_value=proc):
+            assert backend.set_cover(1, cover) is True
+
+    def test_set_cover_missing_file_returns_false(self, tmp_path):
+        from libris.calibre.local import LocalCalibre
+        from libris.config import CalibreConfig
+
+        backend = LocalCalibre(CalibreConfig(mode="local", library_db_path=tmp_path))
+        assert backend.set_cover(1, tmp_path / "nope.jpg") is False

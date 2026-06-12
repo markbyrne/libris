@@ -304,9 +304,9 @@ class LocalCalibre(CalibreBackend):
         except OSError:
             pass  # Non-empty or already gone — safe to ignore
 
-    def set_cover(self, book_id: int, cover_path: Path) -> None:
+    def set_cover(self, book_id: int, cover_path: Path) -> bool:
         if book_id < 0 or not cover_path.exists():
-            return
+            return False
         # --field cover:/abs/path is the correct way to set a cover via
         # calibredb.  The OPF approach (calibredb set_metadata BOOK_ID opf)
         # reads only the OPF metadata fields and stores the OPF XML as text,
@@ -320,12 +320,13 @@ class LocalCalibre(CalibreBackend):
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             log.warning("calibre.local.set_cover_failed: %s", result.stderr.strip())
-        else:
-            log.info("calibre.local.cover_set", extra={"book_id": book_id})
-            # In split-path mode calibredb writes cover.jpg back into _library.
-            # Move it to _book_files so calibre-web can find it.
-            if self._book_files != self._library:
-                self._relocate_cover(book_id)
+            return False
+        log.info("calibre.local.cover_set", extra={"book_id": book_id})
+        # In split-path mode calibredb writes cover.jpg back into _library.
+        # Move it to _book_files so calibre-web can find it.
+        if self._book_files != self._library:
+            self._relocate_cover(book_id)
+        return True
 
     def export_book(self, book_id: int, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)
