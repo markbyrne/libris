@@ -48,8 +48,15 @@ from .cleaner import is_chaff as _is_chaff
 from .cleaner import strip_part_marker as _strip_part_marker
 from .config import load_config
 from .exceptions import ConfigError, RateLimitError
+from .metadata import resolve_metadata
 from .metadata.base import MetadataResult, SearchQuery
-from .metadata.resolver import _SERIES_PREFIX, _extract_author_hint, _extract_series, _extract_year
+from .metadata.resolver import (
+    _SERIES_PREFIX,
+    _download_cover,
+    _extract_author_hint,
+    _extract_series,
+    _extract_year,
+)
 from .metadata.scorer import dedup_candidates
 from .pipeline import Pipeline
 from .state import FileRecord, FileState, StateStore
@@ -3096,6 +3103,128 @@ def clean_library(dry_run: bool, yes: bool, config_path: Path | None) -> None:
     if not dry_run:
         notify_reconnect(config.calibre.reconnect_url)
 
+    click.echo()
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# get-covers — fetch missing cover.jpg files for library books
+# ---------------------------------------------------------------------------
+
+@main.command("get-covers")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="List books missing cover.jpg without fetching anything")
+@_CONFIG_OPTION
+def get_covers(dry_run: bool, config_path: Path | None) -> None:
+    """Fetch missing cover.jpg files for books already in the library.
+
+    Scans every book's directory for a cover.jpg.  For books missing one,
+    the matched cover is fetched — first from the cover URL recorded at
+    import time, falling back to a fresh metadata lookup by title/author —
+    and saved through calibredb so the database and the book directory
+    stay in sync (including split-library relocation).
+
+    \b
+      libris get-covers --dry-run   # see which books are missing covers
+      libris get-covers             # fetch and save them
+    """
+    path = _resolve_config(config_path)
+    config = load_config(path)
+    _setup_logging(config.log_level)
+
+    if config.calibre.mode != "local" or not config.calibre.library_db_path:
+        _die("get-covers requires calibre.mode: local — docker library paths "
+             "are not visible from the host.")
+
+    lib_root = config.calibre.library_db_path.expanduser()
+    book_root = (config.calibre.effective_book_path or lib_root).expanduser()
+
+    def _real_book_dir(format_paths: list[str]) -> Path | None:
+        """The book's directory on disk, split-library aware."""
+        for fp in format_paths:
+            p = Path(fp)
+            try:
+                rel = p.relative_to(lib_root)
+            except ValueError:
+                candidates = [p.parent]
+            else:
+                candidates = [(book_root / rel).parent, p.parent]
+            for c in candidates:
+                if c.is_dir():
+                    return c
+        return None
+
+    calibre = get_calibre(config.calibre)
+    store = _open_store(config.paths.state_db)
+
+    books = calibre.list_books()
+    if not books:
+        click.echo("\n  Calibre library is empty.\n")
+        store.close()
+        return
+
+    missing: list[dict] = []
+    for b in books:
+        book_dir = _real_book_dir(b.get("format_paths", []))
+        if book_dir is None:
+            continue  # no files on disk — clean-library pass 3 territory
+        if not (book_dir / "cover.jpg").exists():
+            missing.append(b)
+
+    click.echo()
+    if not missing:
+        click.echo(f"  All {len(books)} book(s) have a cover.jpg.")
+        click.echo()
+        store.close()
+        return
+
+    click.echo(f"  {len(missing)} of {len(books)} book(s) missing cover.jpg:\n")
+    tag = click.style("[dry-run] ", fg="cyan") if dry_run else ""
+
+    fetched = skipped = 0
+    for b in missing:
+        label = f"book {b['id']} ({b['title']!r} by {', '.join(b['authors']) or 'unknown'})"
+        if dry_run:
+            click.echo(f"  {tag}{label}")
+            continue
+
+        # 1. Cover URL recorded when the book was matched at import time
+        record = store.get_by_calibre_id(b["id"])
+        cover_url = record.matched_cover_url if record else None
+
+        cover_path: Path | None = None
+        if cover_url:
+            with httpx.Client(timeout=12.0) as client:
+                cover_path = _download_cover(cover_url, client)
+
+        # 2. Fall back to a fresh metadata lookup by title/author
+        if cover_path is None:
+            query = b["title"]
+            if b["authors"]:
+                query += f" - {b['authors'][0]}"
+            result = resolve_metadata(query, config.metadata)
+            cover_path = result.cover_path
+
+        if cover_path is None:
+            click.echo(click.style(f"  ⚠ {label} — no cover found", fg="yellow"))
+            skipped += 1
+            continue
+
+        try:
+            calibre.set_cover(b["id"], cover_path)
+            fetched += 1
+            click.echo(f"  ✓ {label}")
+        finally:
+            cover_path.unlink(missing_ok=True)
+
+    click.echo()
+    if dry_run:
+        click.echo(f"  Would fetch {len(missing)} cover(s).")
+    else:
+        click.echo(click.style(f"  {fetched} cover(s) fetched", fg="green")
+                   + (f", {skipped} not found" if skipped else ""))
+        if fetched:
+            notify_reconnect(config.calibre.reconnect_url)
     click.echo()
     store.close()
 

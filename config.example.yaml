@@ -64,7 +64,9 @@ output:
   # Preferred audiobook format: m4b
   preferred_audio_format: m4b
 
-  # Download and embed cover art from Google Books / OpenLibrary
+  # Embed the matched cover art inside the audio file itself (album art).
+  # The matched cover is ALWAYS saved as cover.jpg in the book's library
+  # directory regardless of this setting — this controls only the in-file art.
   embed_cover_art: true
 
   # Controls how ebooks that are not in the preferred format are handled:

@@ -992,6 +992,32 @@ Example output:
 
 ---
 
+### `get-covers` — backfill missing cover.jpg files
+
+Every import saves the matched cover as `cover.jpg` in the book's library directory (this is independent of `output.embed_cover_art`, which controls only the art embedded inside the audio file). For books imported before this behaviour — or whose cover download failed — `get-covers` backfills them:
+
+```bash
+# See which books are missing covers (no changes)
+libris get-covers --dry-run
+
+# Fetch and save them
+libris get-covers
+```
+
+For each book missing a `cover.jpg`, the cover is fetched from the URL recorded when the book was matched at import time, falling back to a fresh Google Books / OpenLibrary lookup by title and author. Covers are saved through `calibredb` so the database `has_cover` flag and the directory stay in sync, including split-library relocation. Requires `calibre.mode: local`.
+
+```
+  3 of 93 book(s) missing cover.jpg:
+
+  ✓ book 41 ('Project Hail Mary' by Andy Weir)
+  ✓ book 87 ('Mort' by Terry Pratchett)
+  ⚠ book 90 ('Obscure Self-Published Thing' by Unknown) — no cover found
+
+  2 cover(s) fetched, 1 not found
+```
+
+---
+
 ### `migrate-libris` — move Libris dirs and DB to a new root
 
 Moves all of Libris's operational directories (`incoming/`, `staging/`, `review/`, `failed/`) and the state database to a new location, then updates the config file in-place. Existing files at the destination are preserved (merge-safe).
