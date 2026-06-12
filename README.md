@@ -1006,6 +1006,8 @@ libris get-covers
 
 For each book missing a `cover.jpg`, the cover is fetched from the URL recorded when the book was matched at import time, falling back to a fresh Google Books / OpenLibrary lookup by title and author. Covers are saved through `calibredb` so the database `has_cover` flag and the directory stay in sync, including split-library relocation. Requires `calibre.mode: local`.
 
+Book locations come from Calibre's database (`books.path`), not from `calibredb list` output — `calibredb list --fields formats` only reports a format when the file exists under the *metadata.db* directory, which in split-library mode is true for no properly-relocated book. (Before v0.3.13 this silently hid split-mode libraries from `get-covers` and `clean-library`'s reconciliation passes.)
+
 ```
   3 of 93 book(s) missing cover.jpg:
 
