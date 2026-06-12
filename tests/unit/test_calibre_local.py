@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -647,3 +648,116 @@ class TestSetMetadataSplitSync:
         list_calls = [c for c in calls if "list" in c]
         assert len(list_calls) == 1, "No post-failure list call expected"
         assert old_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# list_books format_path enrichment from metadata.db (split-mode blindness fix)
+# ---------------------------------------------------------------------------
+
+class TestFormatPathEnrichment:
+    """calibredb list --fields formats reports a format only when the file
+    exists under the LIBRARY root — in split-library mode every relocated
+    book comes back with NO formats.  list_books must fall back to reading
+    books.path + data from metadata.db so file-locating consumers
+    (get-covers, clean-library) see every book.
+
+    Production case (June 2026): 84 of 90 books invisible to get-covers.
+    """
+
+    @staticmethod
+    def _seed_metadata_db(library: Path, rows: list[tuple[int, str, str, str]]) -> None:
+        """rows: (book_id, rel_path, name, FORMAT)."""
+        library.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(library / "metadata.db")
+        con.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, path TEXT)")
+        con.execute(
+            "CREATE TABLE data (id INTEGER PRIMARY KEY, book INTEGER, format TEXT, name TEXT)"
+        )
+        for book_id, rel, name, fmt in rows:
+            con.execute("INSERT OR IGNORE INTO books VALUES (?, ?)", (book_id, rel))
+            con.execute("INSERT INTO data (book, format, name) VALUES (?, ?, ?)",
+                        (book_id, fmt, name))
+        con.commit()
+        con.close()
+
+    def _list_books(self, backend, calibredb_json: str):
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_patch_run(calibredb_json)):
+            return backend.list_books()
+
+    def test_empty_formats_enriched_from_db(self, tmp_path):
+        """The exact production failure: relocated book, calibredb says no formats."""
+        library = tmp_path / "library"
+        self._seed_metadata_db(library, [
+            (88, "Christopher Paolini/The Fork, the Witch, and the Worm (88)",
+             "The Fork, the Witch, and the Worm - Christopher Paolini", "M4B"),
+        ])
+        backend = _make_backend(library, tmp_path / "books")
+
+        calibredb_json = json.dumps([{
+            "id": 88, "title": "The Fork, the Witch, and the Worm",
+            "authors": "Christopher Paolini", "formats": [],
+        }])
+        books = self._list_books(backend, calibredb_json)
+
+        assert books[0]["format_paths"] == [str(
+            library / "Christopher Paolini/The Fork, the Witch, and the Worm (88)"
+                    / "The Fork, the Witch, and the Worm - Christopher Paolini.m4b"
+        )]
+        assert books[0]["formats"] == ["m4b"]
+
+    def test_calibredb_reported_paths_left_untouched(self, tmp_path):
+        library = tmp_path / "library"
+        self._seed_metadata_db(library, [
+            (1, "Author/Book (1)", "WRONG NAME FROM DB", "EPUB"),
+        ])
+        backend = _make_backend(library)
+
+        reported = str(library / "Author/Book (1)/Book.epub")
+        calibredb_json = json.dumps([{
+            "id": 1, "title": "Book", "authors": "Author", "formats": [reported],
+        }])
+        books = self._list_books(backend, calibredb_json)
+
+        assert books[0]["format_paths"] == [reported], \
+            "non-empty calibredb paths must win over the DB fallback"
+
+    def test_multiple_formats_enriched(self, tmp_path):
+        library = tmp_path / "library"
+        self._seed_metadata_db(library, [
+            (2, "Author/Book (2)", "Book", "EPUB"),
+            (2, "Author/Book (2)", "Book", "PDF"),
+        ])
+        backend = _make_backend(library, tmp_path / "books")
+
+        calibredb_json = json.dumps([{
+            "id": 2, "title": "Book", "authors": "Author", "formats": [],
+        }])
+        books = self._list_books(backend, calibredb_json)
+
+        assert sorted(books[0]["formats"]) == ["epub", "pdf"]
+        assert len(books[0]["format_paths"]) == 2
+
+    def test_missing_metadata_db_degrades_gracefully(self, tmp_path):
+        library = tmp_path / "library"
+        library.mkdir()
+        backend = _make_backend(library)
+
+        calibredb_json = json.dumps([{
+            "id": 3, "title": "Book", "authors": "Author", "formats": [],
+        }])
+        books = self._list_books(backend, calibredb_json)
+
+        assert books[0]["format_paths"] == []  # no crash, just unenriched
+
+    def test_book_absent_from_db_left_empty(self, tmp_path):
+        library = tmp_path / "library"
+        self._seed_metadata_db(library, [(7, "A/B (7)", "B", "EPUB")])
+        backend = _make_backend(library)
+
+        calibredb_json = json.dumps([{
+            "id": 99, "title": "Ghost", "authors": "A", "formats": [],
+        }])
+        books = self._list_books(backend, calibredb_json)
+
+        assert books[0]["format_paths"] == []

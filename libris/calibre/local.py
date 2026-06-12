@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -518,7 +519,54 @@ class LocalCalibre(CalibreBackend):
         except _json.JSONDecodeError:
             log.warning("calibre.local.list_books_parse_error", extra={"stdout": result.stdout[:200]})
             return []
-        return [_normalise_book_entry(b) for b in raw]
+        entries = [_normalise_book_entry(b) for b in raw]
+        self._enrich_format_paths(entries)
+        return entries
+
+    def _enrich_format_paths(self, entries: list[dict]) -> None:
+        """Fill empty format_paths from metadata.db directly.
+
+        ``calibredb list --fields formats`` reports a format only when the
+        file physically exists under the LIBRARY root — in split-library
+        mode every properly relocated book therefore comes back with NO
+        formats, which silently blinds every consumer that locates files
+        (get-covers, clean-library reconciliation).  The books.path and
+        data tables are the authoritative record of where calibre expects
+        each file, so read them directly; the paths are constructed under
+        _library exactly as calibredb would report them, and callers remap
+        to book_file_path as usual.
+
+        The DB is opened read-only (mode=ro) — the same access pattern
+        calibre-web uses, safe alongside other readers.  Any sqlite error
+        degrades gracefully to the unenriched entries.
+        """
+        needs = [e for e in entries if not e["format_paths"]]
+        if not needs:
+            return
+        db = self._library / "metadata.db"
+        if not db.exists():
+            return
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            rows = con.execute(
+                "SELECT b.id, b.path, d.name, d.format "
+                "FROM books b JOIN data d ON d.book = b.id"
+            ).fetchall()
+            con.close()
+        except sqlite3.Error as exc:
+            log.warning("calibre.local.format_path_enrich_failed: %s", exc)
+            return
+
+        by_id: dict[int, list[str]] = {}
+        for book_id, rel, name, fmt in rows:
+            by_id.setdefault(book_id, []).append(
+                str(self._library / rel / f"{name}.{fmt.lower()}")
+            )
+        for e in needs:
+            paths = by_id.get(e["id"])
+            if paths:
+                e["format_paths"] = paths
+                e["formats"] = [Path(p).suffix.lstrip(".").lower() for p in paths]
 
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         cmd = ["ebook-convert", str(input_path), str(output_path)]
