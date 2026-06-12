@@ -72,10 +72,9 @@ case "$OS" in
 esac
 
 # ── Detect local vs remote install mode ──────────────────────────────────────
-LIBRIS_VERSION="v0.2.0-beta"
 LIBRIS_REPO="https://github.com/markbyrne/libris"
 
-if [[ -f "pyproject.toml" ]] && grep -q 'name = "libris"' pyproject.toml 2>/dev/null; then
+if [[ -f "pyproject.toml" ]] && grep -q 'name = "pylibris"' pyproject.toml 2>/dev/null; then
     INSTALL_MODE="local"
 else
     INSTALL_MODE="remote"
@@ -235,8 +234,8 @@ if [[ "$INSTALL_MODE" == "local" ]]; then
     info "Installing libris from local source…"
     INSTALL_TARGET="."
 else
-    info "Installing libris ${LIBRIS_VERSION} from GitHub…"
-    INSTALL_TARGET="git+${LIBRIS_REPO}@${LIBRIS_VERSION}"
+    info "Installing the latest libris release from PyPI…"
+    INSTALL_TARGET="pylibris"
 fi
 
 # Detect externally-managed Python (PEP 668 — Debian/Ubuntu 23.04+)
