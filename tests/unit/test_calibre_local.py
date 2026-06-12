@@ -761,3 +761,59 @@ class TestFormatPathEnrichment:
         books = self._list_books(backend, calibredb_json)
 
         assert books[0]["format_paths"] == []
+
+
+class TestGetFormatPathsDbFallback:
+    """_get_format_paths must fall back to metadata.db when calibredb reports
+    no formats (split-mode blindness) — otherwise _relocate_cover, the
+    set_metadata rename sync, and split-mode export silently no-op."""
+
+    def test_falls_back_to_db_when_calibredb_empty(self, tmp_path):
+        library = tmp_path / "library"
+        TestFormatPathEnrichment._seed_metadata_db(library, [
+            (88, "Christopher Paolini/The Fork (88)", "The Fork - Paolini", "M4B"),
+        ])
+        backend = _make_backend(library, tmp_path / "books")
+
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_patch_run(json.dumps([{"id": 88, "formats": []}]))):
+            paths = backend._get_format_paths(88)
+
+        assert paths == [library / "Christopher Paolini/The Fork (88)/The Fork - Paolini.m4b"]
+
+    def test_calibredb_paths_win_when_present(self, tmp_path):
+        library = tmp_path / "library"
+        TestFormatPathEnrichment._seed_metadata_db(library, [
+            (1, "A/B (1)", "WRONG", "EPUB"),
+        ])
+        backend = _make_backend(library)
+        reported = str(library / "A/B (1)/Right.epub")
+
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_patch_run(json.dumps([{"id": 1, "formats": [reported]}]))):
+            paths = backend._get_format_paths(1)
+
+        assert paths == [Path(reported)]
+
+    def test_relocate_cover_works_via_db_fallback(self, tmp_path):
+        """The production failure: cover written under _library never moved
+        to _book_files because the rel dir could not be discovered."""
+        library = tmp_path / "library"
+        book_files = tmp_path / "books"
+        TestFormatPathEnrichment._seed_metadata_db(library, [
+            (88, "Christopher Paolini/The Fork (88)", "The Fork - Paolini", "M4B"),
+        ])
+        backend = _make_backend(library, book_files)
+
+        src_cover = library / "Christopher Paolini/The Fork (88)/cover.jpg"
+        src_cover.parent.mkdir(parents=True)
+        src_cover.write_bytes(b"img")
+        (book_files / "Christopher Paolini/The Fork (88)").mkdir(parents=True)
+
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_patch_run(json.dumps([{"id": 88, "formats": []}]))):
+            backend._relocate_cover(88)
+
+        dest = book_files / "Christopher Paolini/The Fork (88)/cover.jpg"
+        assert dest.exists(), "cover must be relocated to book_files via the DB fallback"
+        assert not src_cover.exists()

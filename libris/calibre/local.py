@@ -131,15 +131,47 @@ class LocalCalibre(CalibreBackend):
             return []
         try:
             rows = _json.loads(result.stdout)
-            if not rows:
-                return []
-            raw_formats = rows[0].get("formats", [])
+            raw_formats = rows[0].get("formats", []) if rows else []
             if isinstance(raw_formats, str):
                 raw_formats = [raw_formats] if raw_formats else []
-            return [Path(p) for p in raw_formats if p]
+            paths = [Path(p) for p in raw_formats if p]
         except Exception as exc:
             log.warning("calibre.local.get_format_paths_parse_error: %s", exc)
             return []
+        if paths:
+            return paths
+        # calibredb reports a format only when the file exists under _library —
+        # false for every relocated book in split-library mode.  Fall back to
+        # the DB record of where calibre expects the files; without this,
+        # _relocate_cover, the set_metadata rename sync, and split-mode export
+        # silently no-op for relocated books.
+        return [Path(p) for p in self._db_format_paths().get(book_id, [])]
+
+    def _db_format_paths(self) -> dict[int, list[str]]:
+        """books.path + data from metadata.db → {book_id: [abs paths under _library]}.
+
+        Read-only (mode=ro) — the same access pattern calibre-web uses.
+        Returns {} on any error.
+        """
+        db = self._library / "metadata.db"
+        if not db.exists():
+            return {}
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            rows = con.execute(
+                "SELECT b.id, b.path, d.name, d.format "
+                "FROM books b JOIN data d ON d.book = b.id"
+            ).fetchall()
+            con.close()
+        except sqlite3.Error as exc:
+            log.warning("calibre.local.db_format_paths_failed: %s", exc)
+            return {}
+        by_id: dict[int, list[str]] = {}
+        for book_id, rel, name, fmt in rows:
+            by_id.setdefault(book_id, []).append(
+                str(self._library / rel / f"{name}.{fmt.lower()}")
+            )
+        return by_id
 
     def _relocate_to_book_files(self, book_id: int) -> None:
         """Move all book files from library_db_path into book_file_path after import.
@@ -544,25 +576,7 @@ class LocalCalibre(CalibreBackend):
         needs = [e for e in entries if not e["format_paths"]]
         if not needs:
             return
-        db = self._library / "metadata.db"
-        if not db.exists():
-            return
-        try:
-            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
-            rows = con.execute(
-                "SELECT b.id, b.path, d.name, d.format "
-                "FROM books b JOIN data d ON d.book = b.id"
-            ).fetchall()
-            con.close()
-        except sqlite3.Error as exc:
-            log.warning("calibre.local.format_path_enrich_failed: %s", exc)
-            return
-
-        by_id: dict[int, list[str]] = {}
-        for book_id, rel, name, fmt in rows:
-            by_id.setdefault(book_id, []).append(
-                str(self._library / rel / f"{name}.{fmt.lower()}")
-            )
+        by_id = self._db_format_paths()
         for e in needs:
             paths = by_id.get(e["id"])
             if paths:
