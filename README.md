@@ -1536,6 +1536,14 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ---
 
+## Support
+
+If Libris saved your library some chaos, you can support development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F6A4219OBI) [![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/markbyrne)
+
+---
+
 ## License
 
 [MIT](LICENSE)

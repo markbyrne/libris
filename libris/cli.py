@@ -428,8 +428,11 @@ def _prompt_rate_limit(error: RateLimitError, config_path: Path, config) -> str:
 # Commands
 # ---------------------------------------------------------------------------
 
-@click.group()
-@click.version_option(package_name="libris")
+@click.group(
+    epilog="Support development: https://ko-fi.com/F6A4219OBI · "
+           "https://github.com/sponsors/markbyrne"
+)
+@click.version_option(package_name="pylibris")
 def main() -> None:
     """Libris — intelligent book and audiobook organiser for Calibre."""
 
