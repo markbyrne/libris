@@ -1,6 +1,7 @@
 # Libris
 
 [![CI](https://github.com/markbyrne/libris/actions/workflows/ci.yml/badge.svg)](https://github.com/markbyrne/libris/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pylibris)](https://pypi.org/project/pylibris/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 
@@ -96,6 +97,14 @@ The installer will:
 The installer defaults to `~/libris/` as the root for all watch folders. Each directory prompt includes a description of its purpose so you know what you're configuring.
 
 ### Manual installation
+
+From PyPI (the distribution is named `pylibris`; the installed command is `libris`):
+
+```bash
+pip install pylibris
+```
+
+Or from source:
 
 ```bash
 git clone https://github.com/markbyrne/libris.git

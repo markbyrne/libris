@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "libris"
+name = "pylibris"
 version = "0.3.10.dev0"
 description = "Intelligent book and audiobook organiser for self-hosted Calibre libraries"
 authors = [{ name = "Mark Byrne" }]
@@ -38,6 +38,12 @@ dev = [
 
 [project.scripts]
 libris = "libris.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/markbyrne/libris"
+Repository = "https://github.com/markbyrne/libris"
+Issues = "https://github.com/markbyrne/libris/issues"
+Changelog = "https://github.com/markbyrne/libris/releases"
 
 [tool.setuptools.packages.find]
 where = ["."]
