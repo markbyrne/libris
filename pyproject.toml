@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylibris"
-version = "0.3.17b0"
+version = "0.3.18.dev0"
 description = "Intelligent book and audiobook organiser for self-hosted Calibre libraries"
 authors = [{ name = "Mark Byrne" }]
 readme = "README.md"
