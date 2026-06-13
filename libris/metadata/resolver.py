@@ -217,8 +217,54 @@ def resolve_metadata(
     return result
 
 
+# Reject downloads smaller than this — blank 1x1 GIFs and "no cover"
+# stubs are well under it; real covers are tens of KB.
+_MIN_COVER_BYTES = 1024
+# Reject images smaller than this on either axis — real covers from the
+# -L endpoints are 300px+; tiny images are tracking pixels / blanks.
+_MIN_COVER_PX = 100
+
+
+def _image_dimensions(data: bytes) -> tuple[int, int] | None:
+    """(width, height) sniffed from PNG/GIF/JPEG headers, or None if unknown.
+
+    Header-only parsing — no imaging library needed.  Unknown formats
+    return None so validation fails open rather than rejecting covers
+    in formats this sniffer doesn't speak.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data[:2] == b"\xff\xd8":  # JPEG: scan segments for a SOFn frame header
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:  # no-length markers
+                i += 2
+                continue
+            seg_len = int.from_bytes(data[i + 2:i + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                height = int.from_bytes(data[i + 5:i + 7], "big")
+                width = int.from_bytes(data[i + 7:i + 9], "big")
+                return width, height
+            i += 2 + seg_len
+    return None
+
+
 def _download_cover(url: str, client: httpx.Client) -> Path | None:
-    """Download cover image to a temp file. Returns path or None on failure.
+    """Download and validate a cover image. Returns temp path or None.
+
+    Validation rejects the junk that cover APIs serve with HTTP 200:
+    HTML error pages (content-type), blank 1x1 GIFs and "no cover" stubs
+    (size floor), and tracking-pixel-sized images (dimension floor).
+    OpenLibrary URLs additionally carry ?default=false so a missing cover
+    is a 404 instead of an "image not available" placeholder JPEG —
+    placeholders are full-size real JPEGs that no content check can
+    reliably distinguish from an actual cover.
 
     The temp file path is registered in ``_pending_cover_paths`` so the atexit /
     SIGTERM handler can clean it up if the process is killed before the caller
@@ -230,12 +276,32 @@ def _download_cover(url: str, client: httpx.Client) -> Path | None:
         response = client.get(url, timeout=10.0, follow_redirects=True)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
+        if not content_type.startswith("image/"):
+            log.warning(
+                "metadata.cover_rejected_not_image",
+                extra={"url": url, "content_type": content_type},
+            )
+            return None
+        data = response.content
+        if len(data) < _MIN_COVER_BYTES:
+            log.warning(
+                "metadata.cover_rejected_too_small",
+                extra={"url": url, "bytes": len(data)},
+            )
+            return None
+        dims = _image_dimensions(data)
+        if dims and (dims[0] < _MIN_COVER_PX or dims[1] < _MIN_COVER_PX):
+            log.warning(
+                "metadata.cover_rejected_tiny_image",
+                extra={"url": url, "width": dims[0], "height": dims[1]},
+            )
+            return None
         ext = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
         fd, path_str = tempfile.mkstemp(suffix=ext, prefix="libris_cover_")
         os.close(fd)
         cover_path = Path(path_str)
         _pending_cover_paths.add(path_str)   # track for SIGTERM cleanup
-        cover_path.write_bytes(response.content)
+        cover_path.write_bytes(data)
         log.debug("metadata.cover_downloaded", extra={"url": url, "path": path_str})
         return cover_path
     except Exception as exc:
