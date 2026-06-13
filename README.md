@@ -47,7 +47,7 @@ Your files             Libris                   Calibre DB         Reader App
 
 - **Automatic import** — drop a file, it appears in Calibre with correct metadata; startup scan catches files that arrived while the daemon was offline
 - **Confidence scoring** — two independent metadata sources cross-checked before import
-- **Full metadata** — title, author, cover art, description, publisher, series, language, ISBN all written to Calibre
+- **Full metadata** — title, author, cover art, description, publisher, series, language, ISBN all written to Calibre; placeholder/junk cover images are rejected via content-type, size, and dimension checks
 - **Series detection** — extracts series name and index from filenames and API data; writes tags for Apple Books, Prologue, and AudioBookshelf
 - **Review queue** — low-confidence matches held for your approval, never silently wrong
 - **Interactive rematch** — re-query metadata APIs from the terminal with live score breakdowns
