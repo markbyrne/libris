@@ -103,10 +103,15 @@ def _parse_response(data: dict) -> list[BookCandidate]:
 
         # Cover image via OpenLibrary cover API
         cover_i = doc.get("cover_i")
-        cover_url = f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg" if cover_i else None
+        # ?default=false: return 404 instead of the "image not available"
+        # placeholder when no cover exists (raise_for_status then rejects it)
+        cover_url = (
+            f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg?default=false"
+            if cover_i else None
+        )
         # Fallback: use ISBN if available
         if not cover_url and isbn_13:
-            cover_url = f"https://covers.openlibrary.org/b/isbn/{isbn_13}-L.jpg"
+            cover_url = f"https://covers.openlibrary.org/b/isbn/{isbn_13}-L.jpg?default=false"
 
         # Language: OpenLibrary returns codes like ["/languages/eng"]
         languages = doc.get("language") or []
