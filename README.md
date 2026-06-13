@@ -1594,6 +1594,27 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ## v0.3.18 (dev)
 
+### New: Web UI (Phase 1 — foundation)
+
+`libris web` starts a local web dashboard at `http://127.0.0.1:8888`.
+
+```bash
+pip install pylibris[web]
+libris web                         # uses auto-discovered config
+libris web --config /path/to/config.yaml --host 0.0.0.0 --port 9000
+```
+
+Phase 1 provides:
+- **Config viewer** — all settings displayed with path-exists checks and the Google Books API key masked
+- **Review queue** — lists all files awaiting human sign-off with match title, author, confidence score, and age
+- **Failed queue** — lists failed files with error messages and missing-file indicators
+- **Pending parts** — shows multi-part audiobook groups with which parts have and haven't arrived yet
+- Live badge counts in the nav update on every page load
+
+Interactive actions (accept, discard, recover, rematch) and the full config editor with directory browser are planned for Phases 2–4.
+
+Requires: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `aiofiles` (all installed with `pip install pylibris[web]`).
+
 ### Internal / code quality
 
 - **cli subpackage** — `libris/cli.py` split into `libris/cli/__init__.py`, `_helpers.py` (pure rendering), and `_setup.py` (config/IO). No user-visible changes; purely structural cleanup to keep the module manageable.

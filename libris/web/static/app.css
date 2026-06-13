@@ -1,0 +1,11 @@
+/* Libris web UI — minimal overrides on top of Tailwind CDN */
+
+/* Smooth page transitions */
+main { animation: fadein 0.15s ease; }
+@keyframes fadein { from { opacity: 0.7; } to { opacity: 1; } }
+
+/* HTMX request indicator on action buttons */
+.htmx-request { opacity: 0.6; pointer-events: none; }
+
+/* Monospace path display */
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }

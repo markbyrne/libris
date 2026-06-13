@@ -3216,3 +3216,32 @@ def migrate_library(
     click.echo("      Run 'libris check-config' to verify.")
     click.echo()
 
+
+# ---------------------------------------------------------------------------
+# Web UI
+# ---------------------------------------------------------------------------
+
+@main.command()
+@_CONFIG_OPTION
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind host.")
+@click.option("--port", default=8888, show_default=True, help="Bind port.")
+def web(config_path: Path | None, host: str, port: int) -> None:
+    """Start the Libris web UI.
+
+    Opens a browser-based dashboard for reviewing queues and editing config.
+    Requires the [web] extras: pip install pylibris[web]
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        _die(
+            "Web UI dependencies not installed.\n"
+            "  Run: pip install pylibris[web]"
+        )
+
+    from ..web import create_app
+
+    path = _resolve_config(config_path)
+    app = create_app(path)
+    click.echo(f"\n  📚  Libris web UI  →  http://{host}:{port}\n")
+    uvicorn.run(app, host=host, port=port, log_level="warning")

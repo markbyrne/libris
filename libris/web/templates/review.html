@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Review — Libris{% endblock %}
+{% block content %}
+<div class="max-w-5xl">
+  <div class="flex items-center gap-4 mb-6">
+    <h1 class="text-xl font-bold">Review Queue</h1>
+    {% if records %}
+    <span class="bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-0.5 rounded-full">{{ records|length }}</span>
+    {% endif %}
+  </div>
+
+  {% if error %}
+  <div class="alert alert-red">{{ error }}</div>
+  {% endif %}
+
+  {% if stale_count %}
+  <div class="alert alert-amber">
+    ⚠ {{ stale_count }} stale record(s) point to missing files and are not shown.
+    Run <code class="bg-amber-100 px-1 rounded">libris review-discard --stale</code> to clean them up.
+  </div>
+  {% endif %}
+
+  {% if not records and not error %}
+  <div class="bg-white rounded-lg border border-gray-200 p-12 text-center text-gray-400">
+    <div class="text-3xl mb-2">✅</div>
+    <div class="font-medium">Review queue is empty</div>
+    <div class="text-sm mt-1">All files have been imported or discarded.</div>
+  </div>
+  {% else %}
+
+  <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <table class="queue w-full">
+      <thead>
+        <tr>
+          <th class="w-8">#</th>
+          <th>File</th>
+          <th>Match</th>
+          <th>Type</th>
+          <th>Score</th>
+          <th>Age</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr class="{{ 'bg-amber-50' if r._is_dup else '' }}">
+          <td class="text-xs text-gray-400 text-center">{{ loop.index }}</td>
+          <td class="max-w-xs">
+            <div class="text-xs font-mono text-gray-600 truncate" title="{{ r.current_path }}">{{ r.current_path | replace(r.current_path | replace(r.current_path.split('/')[-1], ''), '') }}</div>
+            {% if r._is_dup %}
+            <div class="text-xs text-amber-700 mt-0.5">⚠ {{ r.error_msg }}</div>
+            {% endif %}
+          </td>
+          <td class="max-w-xs">
+            {% if r.matched_title %}
+            <div class="text-sm font-medium truncate">{{ r.matched_title }}</div>
+            {% if r.matched_author %}<div class="text-xs text-gray-500 truncate">{{ r.matched_author }}{% if r.matched_year %} · {{ r.matched_year }}{% endif %}</div>{% endif %}
+            {% else %}
+            <span class="text-xs text-red-500">No match found</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.media_type == 'audiobook' %}
+            <span class="tag tag-audio">audio</span>
+            {% elif r._is_dup %}
+            <span class="tag tag-dup">dup</span>
+            {% else %}
+            <span class="tag tag-ebook">ebook</span>
+            {% endif %}
+          </td>
+          <td class="text-right">
+            {% if r.confidence is not none %}
+            <div class="flex items-center gap-1.5">
+              <span class="conf-bar"><span class="conf-fill {{ 'conf-hi' if r.confidence >= 0.8 else 'conf-md' if r.confidence >= 0.6 else 'conf-lo' }}" style="width:{{ (r.confidence * 100)|int }}%"></span></span>
+              <span class="text-xs tabular-nums">{{ "%.2f"|format(r.confidence) }}</span>
+            </div>
+            {% else %}
+            <span class="text-xs text-gray-400">—</span>
+            {% endif %}
+          </td>
+          <td class="text-xs text-gray-400 whitespace-nowrap">{{ r._age }}</td>
+          <td>
+            <div class="flex items-center gap-1.5">
+              {% if r.matched_metadata_json %}
+              <span class="text-xs text-gray-400 italic">use CLI to accept</span>
+              {% endif %}
+              <code class="text-xs text-gray-400">--id {{ loop.index }}</code>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="mt-4 p-3 bg-white rounded-lg border border-gray-200">
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">CLI quick reference</p>
+    <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600 font-mono">
+      <div>libris review-accept --id &lt;N&gt;</div>
+      <div>libris review-discard --id &lt;N&gt;</div>
+      <div>libris review-accept --accept-all</div>
+      <div>libris rematch --id &lt;N&gt;</div>
+      <div>libris show-cover --id &lt;N&gt;</div>
+      <div>libris review-discard --duplicates</div>
+    </div>
+    <p class="text-xs text-gray-400 mt-2">One-click actions coming in Phase 4.</p>
+  </div>
+
+  {% endif %}
+</div>
+{% endblock %}

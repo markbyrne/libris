@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Config — Libris{% endblock %}
+{% block content %}
+<div class="max-w-3xl">
+  <h1 class="text-xl font-bold mb-1">Config</h1>
+  <p class="text-sm text-gray-500 mb-6">
+    Editing <code class="bg-gray-100 px-1 rounded text-xs">{{ config_file }}</code>
+    &nbsp;·&nbsp; Full editor coming in Phase 2
+  </p>
+
+  {% if config_error %}
+  <div class="alert alert-red mb-6">
+    <strong>Config error:</strong> {{ config_error }}
+  </div>
+  {% endif %}
+
+  {% if config %}
+  <div class="space-y-6">
+
+    <!-- Paths -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Paths</h2>
+      </div>
+      <div class="divide-y divide-gray-100">
+        {% set path_fields = [
+          ("incoming_dir",  config.watcher.incoming_dir),
+          ("staging_dir",   config.paths.staging_dir),
+          ("review_dir",    config.paths.review_dir),
+          ("failed_dir",    config.paths.failed_dir),
+          ("state_db",      config.paths.state_db),
+        ] %}
+        {% for name, val in path_fields %}
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">{{ name }}</span>
+          <code class="text-xs flex-1 truncate {{ 'text-green-700' if val and val.exists() else 'text-red-500' }}">{{ val }}</code>
+          {% if val %}
+            {% if val.exists() %}
+            <span class="text-xs text-green-600">✓</span>
+            {% else %}
+            <span class="text-xs text-red-500">missing</span>
+            {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Calibre -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Calibre</h2>
+      </div>
+      <div class="divide-y divide-gray-100">
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">mode</span>
+          <span class="text-xs font-medium">{{ config.calibre.mode }}</span>
+        </div>
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">library_db_path</span>
+          <code class="text-xs flex-1 truncate {{ 'text-green-700' if config.calibre.library_db_path and config.calibre.library_db_path.exists() else 'text-red-500' if config.calibre.library_db_path else 'text-gray-400' }}">{{ config.calibre.library_db_path or '—' }}</code>
+        </div>
+        {% if config.calibre.book_file_path %}
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">book_file_path</span>
+          <code class="text-xs flex-1 truncate {{ 'text-green-700' if config.calibre.book_file_path.exists() else 'text-red-500' }}">{{ config.calibre.book_file_path }}</code>
+        </div>
+        {% endif %}
+        {% if config.calibre.reconnect_url %}
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">reconnect_url</span>
+          <code class="text-xs flex-1 truncate text-gray-700">{{ config.calibre.reconnect_url }}</code>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <!-- Metadata -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Metadata</h2>
+      </div>
+      <div class="divide-y divide-gray-100">
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-36 flex-shrink-0">confidence_threshold</span>
+          <div class="flex items-center gap-2">
+            <div class="conf-bar" style="width:80px">
+              <div class="conf-fill {{ 'conf-hi' if config.metadata.confidence_threshold >= 0.8 else 'conf-md' if config.metadata.confidence_threshold >= 0.6 else 'conf-lo' }}" style="width:{{ (config.metadata.confidence_threshold * 100)|int }}%"></div>
+            </div>
+            <span class="text-xs font-medium">{{ config.metadata.confidence_threshold }}</span>
+          </div>
+        </div>
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-36 flex-shrink-0">duplicate_action</span>
+          <span class="text-xs font-medium">{{ config.metadata.duplicate_action }}</span>
+        </div>
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-36 flex-shrink-0">google_books_api_key</span>
+          <span class="text-xs {{ 'text-green-600 font-medium' if config.metadata.google_books_api_key else 'text-amber-600' }}">
+            {{ '••••••••' + config.metadata.google_books_api_key[-4:] if config.metadata.google_books_api_key else 'not set (60 req/min limit)' }}
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Output -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Output</h2>
+      </div>
+      <div class="divide-y divide-gray-100">
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-36 flex-shrink-0">preferred_ebook_format</span>
+          <span class="text-xs font-medium">{{ config.output.preferred_ebook_format }}</span>
+        </div>
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-36 flex-shrink-0">embed_cover_art</span>
+          <span class="text-xs {{ 'text-green-600' if config.output.embed_cover_art else 'text-gray-400' }}">{{ '✓ enabled' if config.output.embed_cover_art else 'disabled' }}</span>
+        </div>
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-36 flex-shrink-0">ebook_format_policy</span>
+          <span class="text-xs font-medium">{{ config.output.ebook_format_policy }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Notifications -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Notifications (ntfy)</h2>
+      </div>
+      <div class="divide-y divide-gray-100">
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">enabled</span>
+          <span class="text-xs {{ 'text-green-600' if config.ntfy.enabled else 'text-gray-400' }}">{{ '✓ yes' if config.ntfy.enabled else 'no' }}</span>
+        </div>
+        {% if config.ntfy.topic %}
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">topic</span>
+          <span class="text-xs font-medium">{{ config.ntfy.topic }}</span>
+        </div>
+        <div class="flex items-center px-4 py-2.5 gap-3">
+          <span class="text-xs text-gray-500 w-32 flex-shrink-0">base_url</span>
+          <code class="text-xs text-gray-700">{{ config.ntfy.base_url }}</code>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+  </div><!-- /space-y-6 -->
+
+  <p class="mt-6 text-xs text-gray-400">
+    Full config editing with directory browser and test-connection coming in Phase 2.
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

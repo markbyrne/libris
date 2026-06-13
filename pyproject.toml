@@ -28,6 +28,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "aiofiles>=23.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
@@ -51,6 +58,9 @@ license-files = []
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["libris*"]
+
+[tool.setuptools.package-data]
+"libris.web" = ["templates/**/*.html", "static/**/*"]
 
 [tool.ruff]
 line-length = 100

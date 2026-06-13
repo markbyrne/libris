@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Failed — Libris{% endblock %}
+{% block content %}
+<div class="max-w-4xl">
+  <div class="flex items-center gap-4 mb-6">
+    <h1 class="text-xl font-bold">Failed Queue</h1>
+    {% if records %}
+    <span class="bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-0.5 rounded-full">{{ records|length }}</span>
+    {% endif %}
+  </div>
+
+  {% if error %}
+  <div class="alert alert-red">{{ error }}</div>
+  {% endif %}
+
+  {% if not records and not error %}
+  <div class="bg-white rounded-lg border border-gray-200 p-12 text-center text-gray-400">
+    <div class="text-3xl mb-2">✅</div>
+    <div class="font-medium">No failed files</div>
+    <div class="text-sm mt-1">Everything processed without errors.</div>
+  </div>
+  {% else %}
+
+  <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <table class="queue w-full">
+      <thead>
+        <tr>
+          <th class="w-8">#</th>
+          <th>File</th>
+          <th>Error</th>
+          <th>Type</th>
+          <th>Age</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr class="{{ 'opacity-60' if not r._exists else '' }}">
+          <td class="text-xs text-gray-400 text-center">{{ loop.index }}</td>
+          <td class="max-w-xs">
+            <div class="text-xs font-mono text-gray-700 truncate font-medium" title="{{ r.current_path }}">
+              {{ r.current_path.split('/')[-1] }}
+            </div>
+            {% if not r._exists %}
+            <div class="text-xs text-red-400 mt-0.5">file missing from disk</div>
+            {% endif %}
+          </td>
+          <td class="max-w-sm">
+            {% if r.error_msg %}
+            <div class="text-xs font-mono text-red-600 truncate" title="{{ r.error_msg }}">{{ r.error_msg[:120] }}</div>
+            {% else %}
+            <span class="text-xs text-gray-400">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.media_type == 'audiobook' %}
+            <span class="tag tag-audio">audio</span>
+            {% else %}
+            <span class="tag tag-ebook">ebook</span>
+            {% endif %}
+          </td>
+          <td class="text-xs text-gray-400 whitespace-nowrap">{{ r._age }}</td>
+          <td>
+            <code class="text-xs text-gray-400">--id {{ loop.index }}</code>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="mt-4 p-3 bg-white rounded-lg border border-gray-200">
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">CLI quick reference</p>
+    <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600 font-mono">
+      <div>libris recover --id &lt;N&gt;</div>
+      <div>libris remove --id &lt;N&gt;</div>
+      <div>libris recover --all</div>
+      <div>libris remove --chaff</div>
+      <div>libris list-failed</div>
+      <div>libris remove --all</div>
+    </div>
+    <p class="text-xs text-gray-400 mt-2">One-click actions coming in Phase 4.</p>
+  </div>
+
+  {% endif %}
+</div>
+{% endblock %}
