@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TypedDict
 
 # ---------------------------------------------------------------------------
 # Chaff detection
@@ -196,7 +197,17 @@ def _aa_undot(s: str) -> str:
     return s
 
 
-def parse_double_dash(stem: str) -> dict | None:
+class DoubleDashResult(TypedDict):
+    title: str
+    author: str | None
+    year: int | None
+    isbn: str | None
+    series: str | None
+    series_index: int | None
+    narrator: str | None
+
+
+def parse_double_dash(stem: str) -> DoubleDashResult | None:
     """Parse the shadow-library ' -- ' field convention into structured parts.
 
     Archives such as Anna's Archive name files
@@ -273,15 +284,15 @@ def parse_double_dash(stem: str) -> dict | None:
             author = raw_author
         author = author.strip() or None
 
-    return {
-        "title": raw_title,
-        "author": author,
-        "year": year,
-        "isbn": isbn,
-        "series": series,
-        "series_index": series_index,
-        "narrator": narrator,
-    }
+    return DoubleDashResult(
+        title=raw_title,
+        author=author,
+        year=year,
+        isbn=isbn,
+        series=series,
+        series_index=series_index,
+        narrator=narrator,
+    )
 
 
 def extract_isbn(raw: str) -> str | None:

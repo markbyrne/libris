@@ -93,6 +93,18 @@ def _deserialize_candidate(blob: str) -> ScoredCandidate:
     )
 
 
+def _apply_metadata_to_record(record: FileRecord, result: MetadataResult) -> None:
+    """Write all matched-metadata fields from a MetadataResult onto a FileRecord."""
+    record.matched_title = result.title
+    record.matched_author = result.author
+    record.confidence = result.confidence
+    record.matched_year = int(result.year) if result.year else None
+    record.matched_publisher = result.publisher or None
+    record.matched_isbn = result.isbn
+    record.matched_cover_url = result.best.candidate.cover_url if result.best else None
+    record.matched_metadata_json = _serialize_candidate(result.best) if result.best else None
+
+
 def _add_book_args(result: MetadataResult) -> dict[str, str | None]:
     """Resolved title/authors kwargs for CalibreBackend.add_book.
 
@@ -198,13 +210,7 @@ class Pipeline:
 
         record = self._get_or_create_record(path, media_type.value)
         record.state = FileState.PROCESSING
-        record.matched_title = result.title
-        record.matched_author = result.author
-        record.confidence = result.confidence
-        record.matched_year = int(result.year) if result.year else None
-        record.matched_publisher = result.publisher or None
-        record.matched_isbn = result.isbn
-        record.matched_cover_url = result.best.candidate.cover_url if result.best else None
+        _apply_metadata_to_record(record, result)
         self._store.upsert(record)
 
         try:
@@ -314,19 +320,7 @@ class Pipeline:
                             f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
                         )
                         record.state = FileState.REVIEW
-                        record.matched_title = result.title
-                        record.matched_author = result.author
-                        record.confidence = result.confidence
-                        record.matched_year = int(result.year) if result.year else None
-                        record.matched_publisher = result.publisher or None
-                        record.matched_isbn = result.isbn
-                        record.matched_cover_url = (
-                            result.best.candidate.cover_url if result.best else None
-                        )
-                        # Store the new candidate JSON so a CLI retry (overwrite)
-                        # uses the freshly resolved metadata, not the old review match.
-                        if result.best:
-                            record.matched_metadata_json = _serialize_candidate(result.best)
+                        _apply_metadata_to_record(record, result)
                         record.error_msg = (
                             f"Duplicate: already in Calibre as {incoming_fmt.upper()} "
                             f"(ID{'s' if len(dup_ids) > 1 else ''}: "
@@ -1118,14 +1112,7 @@ class Pipeline:
 
         record.current_path = str(dest)
         record.state = FileState.REVIEW
-        record.confidence = result.confidence
-        record.matched_title = result.title
-        record.matched_author = result.author
-        record.matched_year = int(result.year) if result.year else None
-        record.matched_publisher = result.publisher or None
-        record.matched_isbn = result.isbn
-        record.matched_cover_url = result.best.candidate.cover_url if result.best else None
-        record.matched_metadata_json = _serialize_candidate(result.best) if result.best else None
+        _apply_metadata_to_record(record, result)
         self._store.upsert(record)
         self._notifier.send_review_alert(record, result)
         return record

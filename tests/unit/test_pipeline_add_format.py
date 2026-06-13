@@ -193,6 +193,7 @@ class TestForceImportAudioGuard:
         result.cover_path = None
 
         with patch("libris.pipeline.audio_tag"), \
+             patch("libris.pipeline._apply_metadata_to_record"), \
              patch.object(pipeline, "_get_or_create_record", return_value=_fake_record(m4b)), \
              patch.object(pipeline, "_mark_imported", return_value=_fake_record(m4b)):
             pipeline.force_import(m4b, result)

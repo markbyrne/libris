@@ -11,7 +11,8 @@ from pathlib import Path
 
 import httpx
 
-from ..cleaner import clean_query, extract_isbn, parse_double_dash
+from .._constants import HTTP_TIMEOUT_API, HTTP_TIMEOUT_COVER
+from ..cleaner import DoubleDashResult, clean_query, extract_isbn, parse_double_dash
 from ..config import MetadataConfig
 from ..exceptions import RateLimitError
 from .base import USER_AGENT, MetadataResult, SearchQuery
@@ -128,7 +129,7 @@ def resolve_metadata(
         google_scored, ol_scored = _mock_fetch(query)
     else:
         from . import google_books, open_library
-        _client = client or httpx.Client(timeout=12.0, headers={"User-Agent": USER_AGENT})
+        _client = client or httpx.Client(timeout=HTTP_TIMEOUT_API, headers={"User-Agent": USER_AGENT})
 
         google_scored = []
         try:
@@ -205,7 +206,7 @@ def resolve_metadata(
 
     # ── Download cover art ───────────────────────────────────────────────
     if fetch_cover and result.best and result.best.candidate.cover_url and not config.mock_mode:
-        _client = client or httpx.Client(timeout=12.0, headers={"User-Agent": USER_AGENT})
+        _client = client or httpx.Client(timeout=HTTP_TIMEOUT_API, headers={"User-Agent": USER_AGENT})
         result.cover_path = _download_cover(result.best.candidate.cover_url, _client)
 
     log.info(
@@ -279,7 +280,7 @@ def _download_cover(url: str, client: httpx.Client) -> Path | None:
     import tempfile
     cover_path: Path | None = None
     try:
-        response = client.get(url, timeout=10.0, follow_redirects=True)
+        response = client.get(url, timeout=HTTP_TIMEOUT_COVER, follow_redirects=True)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
         if not content_type.startswith("image/"):

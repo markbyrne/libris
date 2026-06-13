@@ -34,401 +34,54 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
 import httpx
 import yaml
 
-from .calibre import get_calibre
-from .calibre.base import notify_reconnect
-from .classifier import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
-from .cleaner import clean_query as _clean_query
-from .cleaner import is_chaff as _is_chaff
-from .cleaner import strip_part_marker as _strip_part_marker
-from .config import load_config
-from .exceptions import ConfigError, RateLimitError
-from .metadata import resolve_metadata
-from .metadata.base import MetadataResult, SearchQuery
-from .metadata.resolver import (
+from .._constants import HTTP_TIMEOUT_API, HTTP_TIMEOUT_SHORT
+from ..calibre import get_calibre
+from ..calibre.base import notify_reconnect
+from ..classifier import AUDIO_EXTENSIONS, EBOOK_EXTENSIONS
+from ..cleaner import clean_query as _clean_query
+from ..cleaner import is_chaff as _is_chaff
+from ..cleaner import strip_part_marker as _strip_part_marker
+from ..config import load_config
+from ..exceptions import ConfigError, RateLimitError
+from ..metadata import resolve_metadata
+from ..metadata.base import MetadataResult, SearchQuery
+from ..metadata.resolver import (
     _SERIES_PREFIX,
     _download_cover,
     _extract_author_hint,
     _extract_series,
     _extract_year,
 )
-from .metadata.scorer import dedup_candidates
-from .pipeline import Pipeline
-from .state import FileRecord, FileState, StateStore
+from ..metadata.scorer import dedup_candidates
+from ..pipeline import Pipeline
+from ..state import FileRecord, FileState, StateStore
+from ._helpers import (
+    _fmt_age, _has_match, _hr, _hyperlink,
+    _live_review_records, _render_failed_list,
+    _render_review_hints, _render_review_record,
+)
+from ._setup import (
+    _CONFIG_OPTION, _calibredb_list, _die, _open_store,
+    _prompt_add_google_key, _prompt_rate_limit, _resolve_config,
+    _save_google_api_key, _setup_logging, _show_queue_summary,
+    _update_config_calibre_split, _update_config_paths,
+)
 
 # Dot-prefixed book-format extensions, for Path.suffix comparison when
 # scanning the library tree for orphan files (clean-library pass 4).
 _LIBRARY_BOOK_EXTENSIONS: frozenset[str] = frozenset(
     f".{ext}" for ext in (*EBOOK_EXTENSIONS, *AUDIO_EXTENSIONS)
 )
-
-log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_CONFIG_SEARCH_PATHS = [
-    Path("config.local.yaml"),
-    Path("config.yaml"),
-    Path.home() / ".config" / "libris" / "config.yaml",
-]
-
-_CONFIG_OPTION = click.option(
-    "--config",
-    "config_path",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Config file path. Overrides LIBRIS_CONFIG and auto-discovery.",
-)
-
 _WEIGHT_MAX = {"isbn": 0.40, "title": 0.30, "author": 0.20, "year": 0.10}
 
-
-def _resolve_config(config_path: Path | None) -> Path:
-    """Return the config path to use, in priority order:
-
-    1. ``--config <path>`` CLI flag
-    2. ``LIBRIS_CONFIG`` environment variable
-    3. ``config.local.yaml`` in the current directory
-    4. ``config.yaml`` in the current directory
-    5. ``~/.config/libris/config.yaml``
-    """
-    import os
-
-    if config_path is not None:
-        if not config_path.exists():
-            _die(f"Config file not found: {config_path}")
-        return config_path
-
-    env_path = os.environ.get("LIBRIS_CONFIG")
-    if env_path:
-        p = Path(env_path).expanduser()
-        if not p.exists():
-            _die(f"Config file from LIBRIS_CONFIG not found: {p}")
-        return p
-
-    for candidate in _CONFIG_SEARCH_PATHS:
-        if candidate.exists():
-            click.echo(click.style(f"Using config: {candidate.resolve()}", dim=True))
-            return candidate
-
-    tried = "\n".join(f"  {p.resolve()}" for p in _CONFIG_SEARCH_PATHS)
-    _die(
-        f"No config file found. Tried:\n{tried}\n"
-        "Options:\n"
-        "  Set LIBRIS_CONFIG=/path/to/config.yaml in your shell profile\n"
-        "  Copy config:  cp config.example.yaml ~/.config/libris/config.yaml\n"
-        "  Pass flag:    libris --config /path/to/config.yaml <command>"
-    )
-
-
-def _die(msg: str) -> None:
-    """Print an error and exit."""
-    click.echo(f"\n  ❌  {msg}\n", err=True)
-    sys.exit(1)
-
-
-def _open_store(db_path: Path) -> StateStore:
-    """Open the state store, printing a clear user-facing error if the DB is corrupt."""
-    try:
-        return StateStore(db_path)
-    except ConfigError as exc:
-        _die(str(exc))
-
-
-def _calibredb_list(query: str, config) -> str:
-    """Run calibredb list and return formatted output. Works in local and docker mode."""
-    if config.calibre.mode == "docker":
-        cmd = [
-            "docker", "exec", config.calibre.docker_container,
-            "calibredb", "list", "--search", query, "--fields", "id,title,authors",
-        ]
-    else:
-        cmd = [
-            "calibredb", "list",
-            "--search", query,
-            "--fields", "id,title,authors",
-            "--with-library", str(config.calibre.library_path),
-        ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        _die(f"calibredb error: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def _hr(width: int = 50) -> str:
-    return "  " + "─" * width
-
-
-def _has_match(record) -> bool:
-    """Return True if the record has a real API-sourced metadata candidate.
-
-    A record with no stored JSON means the pipeline found zero API results
-    (rate limited, unrecognised title, etc.) — review-accept should be
-    blocked until the user runs rematch to find a candidate.
-    """
-    return record.matched_metadata_json is not None
-
-
-def _hyperlink(url: str, text: str) -> str:
-    """Wrap text in an OSC 8 terminal hyperlink (supported by iTerm2, Terminal, Warp, etc.)."""
-    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
-
-
-def _render_review_hints(has_audio: bool = False, has_dupes: bool = False) -> None:
-    """Print the standard action-hints footer for the review queue."""
-    click.echo(_hr())
-    click.echo("  Accept by ID:    libris review-accept --id <N>")
-    click.echo("  Accept all:      libris review-accept --accept-all")
-    click.echo("  Accept by path:  libris review-accept \"<path>\"")
-    if has_dupes:
-        click.echo(click.style(
-            "  Overwrite [!]:   libris review-accept --id <N> --overwrite",
-            fg="yellow",
-        ))
-    click.echo("  Fix bad match:   libris rematch --id <N>")
-    click.echo("  Preview cover:   libris show-cover --id <N>")
-    click.echo("  Discard:         libris review-discard --id <N>")
-    click.echo("  Discard dupes:   libris review-discard --duplicates")
-    if has_audio:
-        click.echo("  Mark as part:    libris mark-as-part --id <N> --part <num> --total <total>")
-
-
-def _show_queue_summary(config) -> None:
-    """Re-render the review queue after an accept/rematch so the user sees fresh IDs.
-
-    Shows items with full detail and the action-hints footer so the user knows
-    what commands are available without re-running 'libris list-review'.
-    Prints a green 'Queue is now empty' message when nothing remains.
-    """
-    store = _open_store(config.paths.state_db)
-    records, stale = _live_review_records(store)
-    pending_count = len(store.list_by_state(FileState.PENDING_PARTS))
-    failed_count = len(store.list_by_state(FileState.FAILED))
-    store.close()
-    click.echo()
-    if not records:
-        click.echo(click.style("  ✅  Review queue is now empty.", fg="green"))
-    else:
-        click.echo(f"  {len(records)} item(s) remaining in review:")
-        click.echo(_hr())
-        click.echo()
-        for i, r in enumerate(records, 1):
-            _render_review_record(i, r)
-            click.echo()
-        has_audio = any(r.media_type == "audiobook" for r in records)
-        has_dupes = any(r.error_msg and r.error_msg.startswith("Duplicate:") for r in records)
-        _render_review_hints(has_audio=has_audio, has_dupes=has_dupes)
-    if stale:
-        click.echo(click.style(
-            f"  ⚠   {stale} stale record(s) not shown — run 'libris review-discard --stale'",
-            fg="yellow",
-        ))
-    if pending_count:
-        click.echo(click.style(
-            f"  ⚠   {pending_count} file(s) in PENDING state — run 'libris list-pending' to see them.",
-            fg="yellow",
-        ))
-    if failed_count:
-        click.echo(click.style(
-            f"  ⚠   {failed_count} file(s) in FAILED state — run 'libris list-failed' to see them.",
-            fg="yellow",
-        ))
-    click.echo()
-
-
-def _live_review_records(store: StateStore) -> list:
-    """Return REVIEW records whose file still exists on disk, in stable order.
-
-    Records pointing to files that have been moved or deleted are silently
-    excluded so list-review, rematch, review-accept, and show-cover all
-    share the same consistent positional IDs.
-
-    Returns (live_records, stale_count).
-    """
-    records = store.list_by_state(FileState.REVIEW)
-    live = [r for r in records if Path(r.current_path).exists()]
-    return live, len(records) - len(live)
-
-
-def _render_review_record(i: int, r) -> None:
-    """Print a single review-queue entry (shared by list-review and show-cover)."""
-    is_dup = bool(r.error_msg and r.error_msg.startswith("Duplicate:"))
-    dup_tag = "  " + click.style("[!]", fg="yellow", bold=True) if is_dup else ""
-    click.echo(f"  [{i}]{dup_tag}  {Path(r.current_path).name}")
-
-    # Duplicate warning — shown before the match block
-    if is_dup:
-        click.echo(click.style(f"        ⚠  {r.error_msg}", fg="yellow"))
-        click.echo(click.style(
-            f"           Accept (overwrite): libris review-accept --id {i} --overwrite", dim=True
-        ))
-        click.echo(click.style(
-            f"           Discard:            libris review-discard --id {i}", dim=True
-        ))
-
-    if not _has_match(r):
-        click.echo(click.style("        [!] No match found", fg="yellow"))
-        click.echo(click.style(f"           Try:  libris rematch --id {i}", dim=True))
-    else:
-        matched = r.matched_title or "(unknown)"
-        if r.matched_author:
-            matched += f"  by {r.matched_author}"
-        conf = f"{r.confidence:.2f}" if r.confidence is not None else "n/a"
-
-        pub_parts = []
-        if r.matched_year:
-            pub_parts.append(str(r.matched_year))
-        if r.matched_publisher:
-            pub_parts.append(r.matched_publisher)
-        if r.matched_isbn:
-            pub_parts.append(f"ISBN {r.matched_isbn}")
-
-        click.echo(f"        Matched:  {matched}")
-        click.echo(f"        Score:    {conf}")
-        if pub_parts:
-            click.echo(f"        Info:     {' · '.join(pub_parts)}")
-        if r.matched_cover_url:
-            click.echo(f"        Cover:    libris show-cover --id {i}")
-
-    click.echo(f"        Path:     \"{r.current_path}\"")
-
-
-# ---------------------------------------------------------------------------
-# Rate-limit helpers (used by rematch)
-# ---------------------------------------------------------------------------
-
-def _save_google_api_key(config_path: Path, api_key: str) -> bool:
-    """Insert/update google_books_api_key in the config file. Returns True on success."""
-    try:
-        with open(config_path) as f:
-            data = yaml.safe_load(f) or {}
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["google_books_api_key"] = api_key
-        with open(config_path, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        return True
-    except Exception as exc:
-        log.warning("cli.save_api_key_failed", extra={"error": str(exc)})
-        return False
-
-
-def _prompt_add_google_key(config_path: Path) -> str:
-    """Walk the user through getting a Google Books API key. Returns 'key_saved' or 'skip'."""
-    click.echo()
-    click.echo("  To get a free Google Books API key:")
-    click.echo(click.style("    1.  https://console.developers.google.com/", bold=True))
-    click.echo(click.style('    2.  Create (or select) a project', dim=True))
-    click.echo(click.style('    3.  APIs & Services  →  Enable APIs & Services', dim=True))
-    click.echo(click.style('    4.  Search "Books API" and enable it', dim=True))
-    click.echo(click.style('    5.  Credentials  →  Create credentials  →  API key', dim=True))
-    click.echo()
-
-    api_key = click.prompt("  Paste API key (or Enter to skip)").strip()
-    if not api_key:
-        click.echo(click.style("  No key entered — skipping Google Books.", fg="yellow"))
-        return "skip"
-
-    if _save_google_api_key(config_path, api_key):
-        click.echo(click.style(f"\n  ✅  Key saved to {config_path.name}. Retrying…\n", fg="green"))
-        return "key_saved"
-    else:
-        click.echo(click.style(
-            f"\n  ⚠   Could not save the key automatically.\n"
-            f"  Add it manually to {config_path} under metadata:\n"
-            f"    google_books_api_key: \"{api_key}\"\n",
-            fg="yellow",
-        ))
-        return "skip"
-
-
-def _prompt_rate_limit(error: RateLimitError, config_path: Path, config) -> str:
-    """Show rate-limit options and return 'wait', 'key_saved', or 'skip'.
-
-    For Google Books without an API key, also offers to add one.
-    Daily/quota limits don't offer a wait option — waiting seconds won't help.
-    The function blocks during any countdown (wait choice).
-    """
-    is_google = error.source == "google_books"
-    source_label = "Google Books" if is_google else "OpenLibrary"
-    has_key = bool(config.metadata.google_books_api_key) if is_google else False
-    is_daily = error.reason in ("dailyLimitExceeded",) or (has_key and is_google)
-    wait_secs = error.retry_after  # None if not provided by the API
-
-    click.echo()
-    click.echo(click.style(f"  ⚠   {source_label} rate limit hit", fg="yellow"))
-
-    if is_google and not has_key:
-        if is_daily or error.reason == "dailyLimitExceeded":
-            click.echo(click.style(
-                "      Daily unauthenticated quota exceeded — resets at midnight Pacific Time.",
-                dim=True,
-            ))
-        else:
-            click.echo(click.style(
-                "      Unauthenticated requests are heavily throttled by Google.",
-                dim=True,
-            ))
-        click.echo(click.style(
-            "      A free API key grants 1,000 requests/day with reliable access.",
-            dim=True,
-        ))
-    elif is_google and has_key:
-        click.echo(click.style(
-            "      Daily API key quota (1,000 req/day) exhausted — resets at midnight Pacific Time.",
-            dim=True,
-        ))
-
-    click.echo()
-
-    # Only offer wait if we have an actual Retry-After time (short-term throttle).
-    # Daily quota resets don't benefit from a short wait.
-    can_wait = wait_secs is not None and not is_daily
-    if can_wait:
-        click.echo(f"  [w]  Wait {wait_secs}s and retry")
-    if is_google and not has_key:
-        click.echo( "  [k]  Add a Google Books API key (free, 1,000 req/day)  ← recommended")
-    click.echo(f"  [s]  Skip {source_label} for this search")
-    click.echo()
-
-    valid_opts = []
-    if can_wait:
-        valid_opts.append("w")
-    if is_google and not has_key:
-        valid_opts.append("k")
-    valid_opts.append("s")
-
-    default = "k" if (is_google and not has_key) else "s"
-    while True:
-        choice = click.prompt("  Choice", default=default).strip().lower()
-        if choice in valid_opts:
-            break
-        click.echo(click.style(f"  Please enter one of: {', '.join(valid_opts)}", fg="yellow"))
-
-    if choice == "w" and can_wait:
-        click.echo()
-        try:
-            for remaining in range(wait_secs, 0, -1):
-                click.echo(f"\r  Waiting {remaining}s…  ", nl=False)
-                time.sleep(1)
-        except KeyboardInterrupt:
-            click.echo("\r  Wait cancelled — skipping.          ")
-            return "skip"
-        click.echo("\r  Done. Retrying…                      ")
-        return "wait"
-
-    if choice == "k":
-        return _prompt_add_google_key(config_path)
-
-    return "skip"  # choice == "s"
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +292,7 @@ def check_config(config_path: Path | None) -> None:
             _headers = {"Title": "Libris check-config", "Priority": "min", "Tags": "white_check_mark"}
             if config.ntfy.auth_token:
                 _headers["Authorization"] = f"Bearer {config.ntfy.auth_token}"
-            _r = httpx.post(_url, content=b"Connection test from libris check-config.", headers=_headers, timeout=8.0)
+            _r = httpx.post(_url, content=b"Connection test from libris check-config.", headers=_headers, timeout=HTTP_TIMEOUT_SHORT)
             _r.raise_for_status()
             click.echo(click.style("✅  notification sent", fg="green"))
         except Exception as _exc:
@@ -679,7 +332,7 @@ def check_config(config_path: Path | None) -> None:
             _gr = httpx.get(
                 "https://www.googleapis.com/books/v1/volumes",
                 params={"q": "test", "maxResults": "1", "key": _api_key},
-                timeout=8.0,
+                timeout=HTTP_TIMEOUT_SHORT,
             )
             _gr.raise_for_status()
             click.echo(click.style("✅  reachable", fg="green"))
@@ -1472,70 +1125,6 @@ def recover(
 # list-failed — read-only view of the FAILED queue
 # ---------------------------------------------------------------------------
 
-def _age_str(created_at) -> str:
-    """Return a human-readable age string like '2d 4h' or '3h 12m'."""
-    from datetime import datetime as _dt
-    from datetime import timezone as _tz
-    now = _dt.now(_tz.utc)
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=_tz.utc)
-    delta = now - created_at
-    total_secs = int(delta.total_seconds())
-    days, rem = divmod(total_secs, 86400)
-    hours, rem = divmod(rem, 3600)
-    mins = rem // 60
-    if days:
-        return f"{days}d {hours}h"
-    if hours:
-        return f"{hours}h {mins}m"
-    return f"{mins}m"
-
-
-def _render_failed_list(records: list) -> None:
-    """Render the failed queue in the standard list-failed format.
-
-    Shared by list-failed, remove, and recover so they all show the same
-    updated view after completing their action.
-    """
-    click.echo()
-    if not records:
-        click.echo("  No files in failed state.")
-        click.echo()
-        return
-
-    live = [(r, Path(r.current_path).exists()) for r in records]
-    stale_count = sum(1 for _, exists in live if not exists)
-
-    click.echo(f"  {len(records)} file(s) in failed state")
-    click.echo(_hr())
-    click.echo()
-    for i, (r, exists) in enumerate(live, 1):
-        name = Path(r.current_path).name
-        age = _age_str(r.created_at)
-        if not exists:
-            click.echo(click.style(f"  [{i}]  {name}  (file missing — {age} ago)", dim=True))
-        else:
-            click.echo(f"  [{i}]  {name}  ({age} ago)")
-        if r.error_msg:
-            click.echo(f"        Error:  {r.error_msg[:120]}")
-        if not exists:
-            click.echo(click.style(f"        libris remove --id {i}", dim=True))
-        click.echo()
-
-    click.echo(_hr())
-    click.echo("  Recover by ID:   libris recover --id <N>")
-    click.echo("  Recover all:     libris recover --all")
-    click.echo("  Remove by ID:    libris remove --id <N>")
-    click.echo("  Remove chaff:    libris remove --chaff")
-    click.echo("  Remove all:      libris remove --all")
-    if stale_count:
-        click.echo()
-        click.echo(click.style(
-            f"  ⚠   {stale_count} record(s) with missing files — run 'libris remove --id <N>' to clean up.",
-            fg="yellow",
-        ))
-    click.echo()
-
 
 @main.command("list-failed")
 @_CONFIG_OPTION
@@ -1714,7 +1303,6 @@ def list_pending(config_path: Path | None) -> None:
     \b
       libris list-pending
     """
-    from datetime import datetime, timedelta, timezone
     path = _resolve_config(config_path)
     config = load_config(path)
     store = _open_store(config.paths.state_db)
@@ -2185,17 +1773,6 @@ def combine_parts(
     sys.exit(1 if any_failed else 0)
 
 
-def _fmt_age(delta) -> str:
-    """Format a timedelta as a human-readable age string."""
-    total = int(delta.total_seconds())
-    if total < 3600:
-        return f"{total // 60}m"
-    if total < 86400:
-        h, m = divmod(total // 60, 60)
-        return f"{h}h {m}m"
-    d, rem = divmod(total, 86400)
-    return f"{d}d {rem // 3600}h"
-
 
 @main.command("search")
 @click.argument("query")
@@ -2293,7 +1870,7 @@ def rematch(review_id: int, source: str, config_path: Path | None) -> None:
 
     current_source = source
 
-    from .metadata import google_books, open_library
+    from ..metadata import google_books, open_library
 
     while True:
         click.clear()
@@ -2389,7 +1966,7 @@ def rematch(review_id: int, source: str, config_path: Path | None) -> None:
             click.echo("  Searching…")
             click.echo()
 
-            with httpx.Client(timeout=12.0) as client:
+            with httpx.Client(timeout=HTTP_TIMEOUT_API) as client:
                 if current_source in ("all", "google"):
                     try:
                         google_results = google_books.fetch(
@@ -2449,8 +2026,8 @@ def rematch(review_id: int, source: str, config_path: Path | None) -> None:
             click.echo("  No results found.")
 
             # Try DDG to surface an author/ISBN hint for the user
-            from .metadata.ddg import search_book_hints
-            with httpx.Client(timeout=8.0) as _ddg_client:
+            from ..metadata.ddg import search_book_hints
+            with httpx.Client(timeout=HTTP_TIMEOUT_SHORT) as _ddg_client:
                 _hints = search_book_hints(_parsed_title, _ddg_client)
             if _hints:
                 click.echo()
@@ -2516,8 +2093,8 @@ def rematch(review_id: int, source: str, config_path: Path | None) -> None:
 
             cover_path = None
             if config.output.embed_cover_art and selected.candidate.cover_url:
-                from .metadata.resolver import _download_cover
-                with httpx.Client(timeout=12.0) as client:
+                from ..metadata.resolver import _download_cover
+                with httpx.Client(timeout=HTTP_TIMEOUT_API) as client:
                     cover_path = _download_cover(selected.candidate.cover_url, client)
 
             result = MetadataResult(
@@ -3194,7 +2771,7 @@ def get_covers(dry_run: bool, config_path: Path | None) -> None:
 
         cover_path: Path | None = None
         if cover_url:
-            with httpx.Client(timeout=12.0) as client:
+            with httpx.Client(timeout=HTTP_TIMEOUT_API) as client:
                 cover_path = _download_cover(cover_url, client)
 
         # 2. Fall back to a fresh metadata lookup by title/author
@@ -3639,139 +3216,3 @@ def migrate_library(
     click.echo("      Run 'libris check-config' to verify.")
     click.echo()
 
-
-# ---------------------------------------------------------------------------
-# Config file patching helpers
-# ---------------------------------------------------------------------------
-
-def _update_config_paths(config_path: Path, updates: dict) -> None:
-    """Rewrite specific config keys in-place, preserving YAML comments.
-
-    *updates* maps dotted config keys (e.g. 'paths.staging_dir',
-    'calibre.library_db_path') to their new Path values.  The rewrite uses
-    targeted line-by-line regex replacement so inline comments are preserved.
-
-    For nested keys (e.g. 'paths.staging_dir'), the function matches the YAML
-    line that starts with 'staging_dir:' (the leaf key) inside the right
-    section, and replaces the value portion.
-    """
-    import re as _re
-
-    text = config_path.read_text()
-    lines = text.splitlines(keepends=True)
-
-    # Build a flat map of leaf_key → new_value (str) from the dotted keys
-    leaf_updates: dict[str, str] = {}
-    for dotted_key, new_val in updates.items():
-        leaf = dotted_key.split(".")[-1]
-        leaf_updates[leaf] = str(new_val)
-
-    result = []
-    for line in lines:
-        replaced = False
-        for leaf, new_val in leaf_updates.items():
-            # Match: optional leading spaces, the key, colon, then the old value
-            # Captures trailing comments so they are preserved.
-            m = _re.match(
-                r'^(\s*' + _re.escape(leaf) + r'\s*:\s*)([^#\n]*)(#.*)?(\n?)$',
-                line,
-            )
-            if m:
-                prefix, _old_val, comment, newline = m.groups()
-                comment_part = ("  " + comment) if comment else ""
-                result.append(f"{prefix}{new_val}{comment_part}{newline}")
-                replaced = True
-                break
-        if not replaced:
-            result.append(line)
-
-    config_path.write_text("".join(result))
-
-
-def _update_config_calibre_split(config_path: Path, db_path: str, books_path: str) -> None:
-    """Transition a config from single library_path to split library_db_path / book_file_path.
-
-    If the config has:
-        calibre:
-          mode: local
-          library_path: /old/path      # or library_db_path
-
-    It becomes:
-        calibre:
-          mode: local
-          library_db_path: /old/path   # renamed from library_path if needed
-          book_file_path: /new/books   # added
-
-    If library_path key is present it's renamed to library_db_path.
-    If book_file_path already exists it is updated.
-    If neither exists, both are written after the 'mode:' line.
-    """
-    import re as _re
-
-    text = config_path.read_text()
-
-    # Step 1: rename library_path → library_db_path (only in calibre section)
-    # We match the line to avoid renaming an unrelated key in another section
-    if _re.search(r'^\s*library_path\s*:', text, _re.MULTILINE):
-        text = _re.sub(
-            r'^(\s*)library_path(\s*:)',
-            r'\1library_db_path\2',
-            text,
-            flags=_re.MULTILINE,
-        )
-
-    # Step 2: update library_db_path value
-    if _re.search(r'^\s*library_db_path\s*:', text, _re.MULTILINE):
-        text = _re.sub(
-            r'^(\s*library_db_path\s*:\s*)([^#\n]*)(#.*)?$',
-            lambda m: f"{m.group(1)}{db_path}{'  ' + m.group(3) if m.group(3) else ''}",
-            text,
-            flags=_re.MULTILINE,
-        )
-    else:
-        # No library_db_path or library_path — insert after 'mode:' line in calibre section
-        text = _re.sub(
-            r'^(\s*mode\s*:.*calibre.*\n)',
-            r'\1' + f"  library_db_path: {db_path}\n",
-            text,
-            flags=_re.MULTILINE,
-        )
-
-    # Step 3: add or update book_file_path
-    if _re.search(r'^\s*book_file_path\s*:', text, _re.MULTILINE):
-        text = _re.sub(
-            r'^(\s*book_file_path\s*:\s*)([^#\n]*)(#.*)?$',
-            lambda m: f"{m.group(1)}{books_path}{'  ' + m.group(3) if m.group(3) else ''}",
-            text,
-            flags=_re.MULTILINE,
-        )
-    else:
-        # Insert book_file_path after library_db_path line
-        text = _re.sub(
-            r'^(\s*library_db_path\s*:.*\n)',
-            r'\1' + f"  book_file_path: {books_path}\n",
-            text,
-            flags=_re.MULTILINE,
-        )
-
-    config_path.write_text(text)
-
-
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
-
-def _setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
-    # Suppress noisy third-party HTTP loggers regardless of the configured
-    # log level.  httpx/httpcore log full request URLs at INFO level, which
-    # would expose API keys embedded in query parameters (e.g. Google Books
-    # appends ?key=YOUR_KEY to every request URL).  These logs are never
-    # useful in normal operation and create significant terminal noise during
-    # interactive commands such as import-one and review-accept.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)

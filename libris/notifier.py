@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 
+from ._constants import HTTP_TIMEOUT_SHORT
 from .config import NtfyConfig
 from .metadata.base import MetadataResult
 from .state import FileRecord
@@ -23,7 +24,7 @@ class Notifier:
 
     def __init__(self, config: NtfyConfig) -> None:
         self._config = config
-        self._client = httpx.Client(timeout=8.0)
+        self._client = httpx.Client(timeout=HTTP_TIMEOUT_SHORT)
 
     # ------------------------------------------------------------------
     # Public notification methods

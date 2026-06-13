@@ -1592,6 +1592,18 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ---
 
+## v0.3.18 (dev)
+
+### Internal / code quality
+
+- **cli subpackage** — `libris/cli.py` split into `libris/cli/__init__.py`, `_helpers.py` (pure rendering), and `_setup.py` (config/IO). No user-visible changes; purely structural cleanup to keep the module manageable.
+- **HTTP timeout constants** — `libris/_constants.py` centralises `HTTP_TIMEOUT_SHORT` (8 s), `HTTP_TIMEOUT_COVER` (10 s), `HTTP_TIMEOUT_API` (12 s) used by notifier, resolver, and CLI commands.
+- **Unified `_fmt_age` helper** — duplicate age-formatting logic merged into a single `_fmt_age(delta)` function in `_helpers.py`.
+- **`_apply_metadata_to_record` helper** — three identical 8-line metadata-assignment blocks in `pipeline.py` collapsed into one helper function.
+- **`DoubleDashResult` TypedDict** — `parse_double_dash` in `cleaner.py` now returns a typed dict instead of a plain `dict`.
+
+---
+
 ## Support
 
 If Libris saved your library some chaos, you can support development:
