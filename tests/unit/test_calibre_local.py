@@ -817,3 +817,62 @@ class TestGetFormatPathsDbFallback:
         dest = book_files / "Christopher Paolini/The Fork (88)/cover.jpg"
         assert dest.exists(), "cover must be relocated to book_files via the DB fallback"
         assert not src_cover.exists()
+
+
+# ---------------------------------------------------------------------------
+# export_book in split-library mode — regression for revert-import bug
+# ---------------------------------------------------------------------------
+
+class TestExportFromBookFiles:
+    """_export_from_book_files must fall back to metadata.db when calibredb
+    returns empty format paths — same split-mode blindness fixed in
+    _get_format_paths.  Without the fallback, revert-import fails with
+    "calibredb export returned no files for book ID N"."""
+
+    def test_falls_back_to_db_when_calibredb_empty(self, tmp_path):
+        library = tmp_path / "library"
+        book_files = tmp_path / "books"
+        # Seed metadata.db so _db_format_paths() can construct the path.
+        TestFormatPathEnrichment._seed_metadata_db(library, [
+            (124, "D.J. MacHale/The Merchant of Death (124)", "The Merchant of Death", "EPUB"),
+        ])
+        # Seed the actual file at the remapped book_files location.
+        rel = "D.J. MacHale/The Merchant of Death (124)/The Merchant of Death.epub"
+        real_file = book_files / rel
+        real_file.parent.mkdir(parents=True, exist_ok=True)
+        real_file.write_bytes(b"epub content")
+
+        backend = _make_backend(library, book_files)
+        dest = tmp_path / "export_dest"
+        dest.mkdir()  # export_book creates this; _export_from_book_files does not
+
+        # calibredb list returns the book row but with an empty formats list
+        # — exactly what happens for relocated books in split mode.
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_patch_run(json.dumps([{"id": 124, "formats": []}]))):
+            exported = backend._export_from_book_files(124, dest)
+
+        assert len(exported) == 1, "One file must be exported via DB fallback"
+        assert exported[0].name == "The Merchant of Death.epub"
+        assert exported[0].exists()
+
+    def test_returns_empty_when_no_db_record(self, tmp_path):
+        library = tmp_path / "library"
+        book_files = tmp_path / "books"
+        (library / "metadata.db").parent.mkdir(parents=True, exist_ok=True)
+        # Empty DB — book 999 has no record
+        con = sqlite3.connect(str(library / "metadata.db"))
+        con.execute("CREATE TABLE IF NOT EXISTS books (id INTEGER, path TEXT)")
+        con.execute("CREATE TABLE IF NOT EXISTS data (book INTEGER, name TEXT, format TEXT)")
+        con.commit()
+        con.close()
+
+        backend = _make_backend(library, book_files)
+        dest = tmp_path / "export_dest"
+        dest.mkdir()
+
+        with patch("libris.calibre.local.subprocess.run",
+                   return_value=_patch_run(json.dumps([{"id": 999, "formats": []}]))):
+            exported = backend._export_from_book_files(999, dest)
+
+        assert exported == []

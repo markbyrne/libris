@@ -154,6 +154,46 @@ def clean_query(raw: str) -> str:
 _DOUBLE_DASH_SEP = re.compile(r"\s+--\s+")
 _HEX_HASH_FIELD = re.compile(r"^[0-9a-fA-F]{16,64}$")
 _BARE_YEAR_FIELD = re.compile(r"^(?:19|20)\d{2}$")
+# "isbn13 9781416914204" or "isbn10 0689877811" with optional hyphens
+_ISBN_FIELD = re.compile(r"^isbn(?:13|10)\s+([\d\-]{9,17})$", re.IGNORECASE)
+# "Series_ Book ten, Actual Title" or "Series_ Book 3, Actual Title"
+_SERIES_BOOK_SPLIT = re.compile(
+    r"^(.+?)_\s*Book\s+(\w+)[,\s]+(.+)$",
+    re.IGNORECASE,
+)
+_WORD_ORDINALS: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
+}
+# Source-attribution strings that appear as trailing fields in Anna's Archive
+# filenames.  These are consumed so they never end up in title/author.
+_ATTRIBUTION_STRINGS: frozenset[str] = frozenset({
+    "anna's archive",
+    "z-library",
+    "zlibrary",
+    "libgen",
+    "library genesis",
+    "sci-hub",
+})
+
+
+def _aa_undot(s: str) -> str:
+    """Reverse Anna's Archive dot→underscore encoding in a name field.
+
+    AA replaces dots with underscores in author initials and adds a space
+    between each initial: "D.J. MacHale" → "D_ J_ MacHale".
+
+    Two passes:
+    1. Absorb the inter-initial space: "D_ J_" → "D.J_"  (lookahead ensures
+       the space is only dropped when the NEXT token is also an initial).
+    2. Convert remaining trailing underscores: "J_" → "J."
+    """
+    s = re.sub(r"\b([A-Z])_\s+(?=[A-Z]_)", r"\1.", s)
+    s = re.sub(r"\b([A-Z])_", r"\1.", s)
+    return s
 
 
 def parse_double_dash(stem: str) -> dict | None:
@@ -165,20 +205,38 @@ def parse_double_dash(stem: str) -> dict | None:
     pollute the search query and the author is never extracted), so the
     resolver should consume the fields directly.
 
-    Returns ``{"title": str, "author": str|None, "year": int|None}``
-    when the stem uses the convention (two or more " -- " separators),
-    else None.  Trailing hash fields and bare-year fields are recognised
-    and consumed; the publisher field (anything after the author) is
-    deliberately dropped — it adds noise to title/author search queries.
+    Returns a dict with keys ``title``, ``author``, ``year``, ``isbn``,
+    ``series``, ``series_index``, ``narrator`` when the stem uses the
+    convention (two or more " -- " separators), else None.
+
+    Processing applied to each field:
+    - Hex hash fields (MD5/SHA-1/SHA-256) are consumed silently.
+    - Bare four-digit year fields are consumed as the year.
+    - ``isbn13``/``isbn10`` prefixed fields are consumed as the ISBN.
+    - Known attribution strings (``anna's archive``, ``z-library`` …) are
+      consumed silently.
+    - The title field is checked for ``{Series}_ Book {N}, {Title}`` and
+      split into series/series_index/title when found.
+    - The author field has AA dot→underscore encoding reversed
+      (``D_ J_`` → ``D.J.``) then split on the first comma: the part before
+      the comma is the author; anything after is stored as narrator (common
+      for audiobook filenames which list narrator after the author).
     """
     fields = [f.strip() for f in _DOUBLE_DASH_SEP.split(stem) if f.strip()]
     if len(fields) < 3:
         return None  # "A -- B" alone is too ambiguous to call structured
 
     year: int | None = None
+    isbn: str | None = None
     rest: list[str] = []
     for f in fields:
         if _HEX_HASH_FIELD.match(f):
+            continue
+        if f.lower() in _ATTRIBUTION_STRINGS:
+            continue
+        m_isbn = _ISBN_FIELD.match(f)
+        if m_isbn:
+            isbn = re.sub(r"[^\d]", "", m_isbn.group(1))
             continue
         if year is None and _BARE_YEAR_FIELD.match(f):
             year = int(f)
@@ -187,10 +245,42 @@ def parse_double_dash(stem: str) -> dict | None:
 
     if not rest:
         return None
+
+    # ── Title field: extract embedded series + ordinal ────────────────────
+    raw_title = rest[0]
+    series: str | None = None
+    series_index: int | None = None
+    m_series = _SERIES_BOOK_SPLIT.match(raw_title)
+    if m_series:
+        series = m_series.group(1).rstrip("_ ").strip()
+        ordinal_str = m_series.group(2)
+        try:
+            series_index = int(ordinal_str)
+        except ValueError:
+            series_index = _WORD_ORDINALS.get(ordinal_str.lower())
+        raw_title = m_series.group(3).strip()
+
+    # ── Author field: reverse AA encoding, split narrator ────────────────
+    raw_author = rest[1] if len(rest) > 1 else None
+    author: str | None = None
+    narrator: str | None = None
+    if raw_author:
+        raw_author = _aa_undot(raw_author)
+        if ", " in raw_author:
+            author, narrator = raw_author.split(", ", 1)
+            narrator = narrator.strip() or None
+        else:
+            author = raw_author
+        author = author.strip() or None
+
     return {
-        "title": rest[0],
-        "author": rest[1] if len(rest) > 1 else None,
+        "title": raw_title,
+        "author": author,
         "year": year,
+        "isbn": isbn,
+        "series": series,
+        "series_index": series_index,
+        "narrator": narrator,
     }
 
 

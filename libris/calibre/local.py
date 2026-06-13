@@ -430,14 +430,20 @@ class LocalCalibre(CalibreBackend):
         except Exception:
             rows = []
 
-        if not rows:
+        raw_formats = rows[0].get("formats", []) if rows else []
+        if isinstance(raw_formats, str):
+            raw_formats = [raw_formats] if raw_formats else []
+
+        # Split-library blindness: calibredb returns empty format paths for
+        # relocated books (files no longer exist under _library).  Fall back to
+        # reading metadata.db directly — same pattern as _get_format_paths().
+        if not raw_formats:
+            raw_formats = self._db_format_paths().get(book_id, [])
+
+        if not raw_formats:
             log.info("calibre.local.exported",
                      extra={"book_id": book_id, "files": []})
             return []
-
-        raw_formats = rows[0].get("formats", [])
-        if isinstance(raw_formats, str):
-            raw_formats = [raw_formats] if raw_formats else []
 
         exported: list[Path] = []
         for fmt_str in raw_formats:

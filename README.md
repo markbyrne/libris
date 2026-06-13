@@ -49,6 +49,7 @@ Your files             Libris                   Calibre DB         Reader App
 - **Confidence scoring** — two independent metadata sources cross-checked before import
 - **Full metadata** — title, author, cover art, description, publisher, series, language, ISBN all written to Calibre; placeholder/junk cover images are rejected via content-type, size, and dimension checks
 - **Series detection** — extracts series name and index from filenames and API data; writes tags for Apple Books, Prologue, and AudioBookshelf
+- **Anna's Archive filename parsing** — structured `title -- author -- year -- publisher -- md5` filenames are parsed field-by-field; extracts ISBN, series/ordinal, narrator, and author initials (AA encodes `D.J.` as `D_ J_`) before the metadata lookup, yielding near-perfect confidence scores for these files
 - **Review queue** — low-confidence matches held for your approval, never silently wrong
 - **Interactive rematch** — re-query metadata APIs from the terminal with live score breakdowns
 - **Web search fallback** — if both APIs return no results, DuckDuckGo Instant Answers is queried for author/ISBN hints and the search is retried automatically
@@ -1536,6 +1537,8 @@ Two known causes:
 
 **Split-library mode (fixed v0.3.7b0)** — if `calibre.book_file_path` is set separately from `library_db_path`, Libris moves book files to `book_file_path` after import. But `calibredb export` constructs the export path relative to `library_db_path` and finds no files there (rc=0, empty result). Fixed: in split-library mode `export_book` now asks calibredb where files *should* be, remaps those paths from `library_db_path → book_file_path`, and copies the files directly. A name-based fallback scan handles books imported before this fix.
 
+**Split-library revert-import blindness (fixed v0.3.17b0)** — a second code path in `_export_from_book_files` also queried `calibredb list --fields formats`, which always returns an empty formats list for relocated books. `revert-import` would log "calibredb export returned no files" even though the book existed. Fixed by applying the same `_db_format_paths()` fallback used in `_get_format_paths()`.
+
 ---
 
 ### Book imported to wrong directory structure
@@ -1551,6 +1554,16 @@ Two fixes in v0.3.8b0:
 (Historical note: v0.3.4b0 and v0.3.7b0 attributed this bug to stale *embedded tags*. That explanation was wrong for the directory structure — Calibre doesn't read audio tags at add time. The embed step is still performed because the tags matter for audiobook players such as Audiobookshelf and Apple Books. v0.3.7b0's `-map_metadata 0:c` flag also caused ffmpeg to fail outright on chapterless M4Bs; v0.3.8b0 replaces it with `-map_chapters 0` and scopes the tag clear to global metadata so chapter titles survive.)
 
 If you have already-imported books at a wrong path, use `libris revert-import` to remove them and re-import, or rename the directory in your Calibre library and run `calibredb check_library` to rescan.
+
+---
+
+### Duplicate not detected when one entry has a series prefix
+
+Libris uses calibredb's exact-title search (`title:"=..."`) to spot duplicates. If one entry has a series prefix (`Pendragon: The Merchant of Death`) and the other doesn't (`The Merchant of Death`), the exact search misses the match and a duplicate is created.
+
+Fixed in v0.3.17b0: when the primary exact search returns nothing, a secondary contains-mode search (no `=` prefix) is run against the bare title. This catches series-prefix mismatches in both directions.
+
+If you already have duplicates from before this fix, use `libris revert-import` to remove the newer entry and re-import — Libris will then find the existing entry and merge the format.
 
 ---
 

@@ -90,6 +90,12 @@ def resolve_metadata(
         clean = clean_query(dd["title"]) or dd["title"]
         author_hint = dd["author"] or author_hint
         year = dd["year"] or year
+        if dd.get("isbn"):
+            isbn = dd["isbn"]
+        if dd.get("series"):
+            series_hint = dd["series"]
+        if dd.get("series_index") is not None:
+            series_index_hint = float(dd["series_index"])
 
     # For "Series N - Book Title" filenames, query by book title only.
     # "Inheritance Cycle 2 - Eldest" → query "Eldest", not "Inheritance Cycle 2 Eldest",

@@ -1170,10 +1170,33 @@ class Pipeline:
                 parts.append(f'authors:"{surname}"')
         query = " and ".join(parts)
         try:
-            return self._calibre.search(query)
+            ids: list[int] = list(self._calibre.search(query))
         except Exception as exc:
             log.warning("pipeline.duplicate_check_failed: %s", exc)
             return []
+
+        if ids:
+            return ids
+
+        # Secondary: contains-mode title search (no "=" prefix).
+        # Catches series-prefix mismatches in both directions:
+        #   • library has "Pendragon: The Merchant Of Death", incoming is
+        #     "The Merchant of Death" — the bare title is a substring of the
+        #     library entry so the contains search finds it.
+        #   • library has "The Merchant of Death", incoming is "Pendragon: …"
+        #     — the stripped bare title matches exactly.
+        # Strip "Series: " prefix first so the contains query is as specific
+        # as possible and avoids spurious matches.
+        bare = (title.split(": ", 1)[1] if ": " in title else title).replace('"', '\\"')
+        parts2 = [f'title:"{bare}"']   # no "=" → calibredb contains search
+        if author and surname:
+            parts2.append(f'authors:"{surname}"')
+        try:
+            ids = list(self._calibre.search(" and ".join(parts2)))
+        except Exception as exc:
+            log.warning("pipeline.duplicate_check_series_strip_failed: %s", exc)
+
+        return ids
 
     def _find_fuzzy_duplicates(self, title: str, author: str) -> list[dict]:
         """Return Calibre books that are near-matches (85–99% similarity) but not exact.
