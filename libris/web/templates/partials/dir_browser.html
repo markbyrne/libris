@@ -1,0 +1,36 @@
+<div class="text-xs font-mono select-none">
+  <!-- Current path breadcrumb -->
+  <div class="flex items-center gap-2 px-3 py-2 bg-gray-50 border-b border-gray-200 text-gray-500 min-w-0">
+    {% if parent %}
+    <button type="button" title="Up"
+      class="flex-shrink-0 text-blue-600 hover:text-blue-800 font-bold px-1"
+      hx-get="/api/fs/browse?path={{ parent | urlencode }}&field={{ field }}"
+      hx-target="#dir-browser-body" hx-swap="innerHTML">↑</button>
+    {% endif %}
+    <span class="truncate text-gray-600">{{ current }}</span>
+  </div>
+
+  <!-- Directory entries -->
+  <div class="max-h-64 overflow-y-auto divide-y divide-gray-100">
+    {% for entry in entries %}
+    <button type="button"
+      class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+      hx-get="/api/fs/browse?path={{ entry.path | urlencode }}&field={{ field }}"
+      hx-target="#dir-browser-body" hx-swap="innerHTML">
+      <span class="text-gray-400 flex-shrink-0">📁</span>
+      <span class="truncate">{{ entry.name }}</span>
+    </button>
+    {% else %}
+    <div class="px-3 py-6 text-gray-400 text-center text-xs">No subdirectories</div>
+    {% endfor %}
+  </div>
+
+  <!-- Footer -->
+  <div class="flex items-center gap-2 px-3 py-2 border-t border-gray-200 bg-gray-50">
+    <span class="flex-1 truncate text-gray-400 text-xs">{{ current }}</span>
+    <button type="button" class="btn btn-ghost btn-sm flex-shrink-0"
+      onclick="createDirPrompt('{{ current }}', '{{ field }}')">+ Folder</button>
+    <button type="button" class="btn btn-primary btn-sm flex-shrink-0"
+      onclick="selectDirPath('{{ current }}')">Select</button>
+  </div>
+</div>

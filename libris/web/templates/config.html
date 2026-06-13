@@ -1,49 +1,136 @@
 {% extends "base.html" %}
 {% block title %}Config — Libris{% endblock %}
 {% block content %}
-<div class="max-w-3xl">
-  <h1 class="text-xl font-bold mb-1">Config</h1>
-  <p class="text-sm text-gray-500 mb-6">
-    Editing <code class="bg-gray-100 px-1 rounded text-xs">{{ config_file }}</code>
-    &nbsp;·&nbsp; Full editor coming in Phase 2
-  </p>
 
-  {% if config_error %}
-  <div class="alert alert-red mb-6">
-    <strong>Config error:</strong> {{ config_error }}
+{%- macro path_row(name, value, label, hint='') -%}
+<div class="grid grid-cols-[11rem_1fr] items-start gap-x-4 py-2.5 px-4 border-b border-gray-100">
+  <label for="{{ name }}" class="text-xs text-gray-500 pt-2 leading-tight">{{ label }}</label>
+  <div>
+    <div class="flex gap-1.5">
+      <input type="text" id="{{ name }}" name="{{ name }}"
+             value="{{ value or '' }}"
+             class="flex-1 rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+             placeholder="/path/to/directory" autocomplete="off">
+      <button type="button"
+              class="btn btn-ghost btn-sm flex-shrink-0"
+              onclick="openDirModal('{{ name }}', document.getElementById('{{ name }}').value || '{{ value or '/' }}')">
+        Browse
+      </button>
+    </div>
+    {% if hint %}<p class="text-xs text-gray-400 mt-1">{{ hint }}</p>{% endif %}
   </div>
+</div>
+{%- endmacro -%}
+
+{%- macro text_row(name, value, label, type='text', hint='', placeholder='') -%}
+<div class="grid grid-cols-[11rem_1fr] items-start gap-x-4 py-2.5 px-4 border-b border-gray-100">
+  <label for="{{ name }}" class="text-xs text-gray-500 pt-2 leading-tight">{{ label }}</label>
+  <div>
+    <input type="{{ type }}" id="{{ name }}" name="{{ name }}"
+           value="{{ value or '' }}"
+           class="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+           placeholder="{{ placeholder }}" autocomplete="off">
+    {% if hint %}<p class="text-xs text-gray-400 mt-1">{{ hint }}</p>{% endif %}
+  </div>
+</div>
+{%- endmacro -%}
+
+{%- macro number_row(name, value, label, step='0.1', min='0', hint='') -%}
+<div class="grid grid-cols-[11rem_1fr] items-start gap-x-4 py-2.5 px-4 border-b border-gray-100">
+  <label for="{{ name }}" class="text-xs text-gray-500 pt-2">{{ label }}</label>
+  <input type="number" id="{{ name }}" name="{{ name }}"
+         value="{{ value }}" step="{{ step }}" min="{{ min }}"
+         class="w-32 rounded border border-gray-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-300">
+  {% if hint %}<p class="text-xs text-gray-400 col-start-2 mt-1">{{ hint }}</p>{% endif %}
+</div>
+{%- endmacro -%}
+
+{%- macro check_row(name, checked, label, hint='') -%}
+<div class="grid grid-cols-[11rem_1fr] items-center gap-x-4 py-2.5 px-4 border-b border-gray-100">
+  <span class="text-xs text-gray-500">{{ label }}</span>
+  <label class="flex items-center gap-2 cursor-pointer select-none">
+    <input type="checkbox" name="{{ name }}" {% if checked %}checked{% endif %}
+           class="w-4 h-4 rounded accent-blue-600">
+    <span class="text-xs text-gray-600">enabled</span>
+  </label>
+  {% if hint %}<p class="text-xs text-gray-400 col-start-2 mt-0.5">{{ hint }}</p>{% endif %}
+</div>
+{%- endmacro -%}
+
+{%- macro select_row(name, value, label, options, hint='') -%}
+<div class="grid grid-cols-[11rem_1fr] items-center gap-x-4 py-2.5 px-4 border-b border-gray-100">
+  <label for="{{ name }}" class="text-xs text-gray-500">{{ label }}</label>
+  <select id="{{ name }}" name="{{ name }}"
+          class="w-48 rounded border border-gray-300 px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-300">
+    {% for val, display in options %}
+    <option value="{{ val }}" {% if value == val %}selected{% endif %}>{{ display }}</option>
+    {% endfor %}
+  </select>
+  {% if hint %}<p class="text-xs text-gray-400 col-start-2 mt-1">{{ hint }}</p>{% endif %}
+</div>
+{%- endmacro -%}
+
+<div class="max-w-2xl">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-bold">Config</h1>
+      <p class="text-xs text-gray-400 mt-0.5">
+        Editing <code class="bg-gray-100 px-1 rounded">{{ config_file }}</code>
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      <button type="button" class="btn btn-ghost"
+              hx-post="/api/config/test"
+              hx-target="#test-results"
+              hx-swap="innerHTML"
+              hx-indicator="#test-spinner">
+        <span id="test-spinner" class="htmx-indicator">⟳</span>
+        Test config
+      </button>
+      <button type="submit" form="config-form" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+
+  {% if save_success %}
+  <div class="alert alert-green mb-4">Config saved successfully.</div>
   {% endif %}
 
+  {% if config_error %}
+  <div class="alert alert-red mb-4"><strong>Error:</strong> {{ config_error }}</div>
+  {% endif %}
+
+  <!-- Test results -->
+  <div id="test-results" class="mb-4 empty:hidden"></div>
+
   {% if config %}
-  <div class="space-y-6">
+  <form id="config-form" method="post" action="/config" class="space-y-5">
+
+    <!-- Watcher -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Watcher</h2>
+      </div>
+      {{ path_row("watcher.incoming_dir", config.watcher.incoming_dir, "incoming_dir",
+                  "Drop ebooks/audiobooks here for automatic processing.") }}
+      {{ number_row("watcher.poll_interval_seconds", config.watcher.poll_interval_seconds,
+                    "poll_interval_seconds", step="0.5", min="0.5") }}
+      {{ number_row("watcher.scan_interval_hours", config.watcher.scan_interval_hours,
+                    "scan_interval_hours", step="0.5", min="0") }}
+    </section>
 
     <!-- Paths -->
     <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
         <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Paths</h2>
       </div>
-      <div class="divide-y divide-gray-100">
-        {% set path_fields = [
-          ("incoming_dir",  config.watcher.incoming_dir),
-          ("staging_dir",   config.paths.staging_dir),
-          ("review_dir",    config.paths.review_dir),
-          ("failed_dir",    config.paths.failed_dir),
-          ("state_db",      config.paths.state_db),
-        ] %}
-        {% for name, val in path_fields %}
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">{{ name }}</span>
-          <code class="text-xs flex-1 truncate {{ 'text-green-700' if val and val.exists() else 'text-red-500' }}">{{ val }}</code>
-          {% if val %}
-            {% if val.exists() %}
-            <span class="text-xs text-green-600">✓</span>
-            {% else %}
-            <span class="text-xs text-red-500">missing</span>
-            {% endif %}
-          {% endif %}
-        </div>
-        {% endfor %}
-      </div>
+      {{ path_row("paths.staging_dir", config.paths.staging_dir, "staging_dir",
+                  "Temporary directory for format conversion.") }}
+      {{ path_row("paths.review_dir", config.paths.review_dir, "review_dir",
+                  "Low-confidence matches land here for manual review.") }}
+      {{ path_row("paths.failed_dir", config.paths.failed_dir, "failed_dir",
+                  "Processing errors quarantined here.") }}
+      {{ path_row("paths.state_db", config.paths.state_db, "state_db",
+                  "SQLite database file (parent directory must exist).") }}
     </section>
 
     <!-- Calibre -->
@@ -51,28 +138,41 @@
       <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
         <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Calibre</h2>
       </div>
-      <div class="divide-y divide-gray-100">
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">mode</span>
-          <span class="text-xs font-medium">{{ config.calibre.mode }}</span>
-        </div>
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">library_db_path</span>
-          <code class="text-xs flex-1 truncate {{ 'text-green-700' if config.calibre.library_db_path and config.calibre.library_db_path.exists() else 'text-red-500' if config.calibre.library_db_path else 'text-gray-400' }}">{{ config.calibre.library_db_path or '—' }}</code>
-        </div>
-        {% if config.calibre.book_file_path %}
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">book_file_path</span>
-          <code class="text-xs flex-1 truncate {{ 'text-green-700' if config.calibre.book_file_path.exists() else 'text-red-500' }}">{{ config.calibre.book_file_path }}</code>
-        </div>
-        {% endif %}
-        {% if config.calibre.reconnect_url %}
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">reconnect_url</span>
-          <code class="text-xs flex-1 truncate text-gray-700">{{ config.calibre.reconnect_url }}</code>
-        </div>
-        {% endif %}
+
+      <div class="grid grid-cols-[11rem_1fr] items-center gap-x-4 py-2.5 px-4 border-b border-gray-100">
+        <label for="calibre.mode" class="text-xs text-gray-500">mode</label>
+        <select id="calibre.mode" name="calibre.mode"
+                onchange="toggleCalibreMode(this.value)"
+                class="w-32 rounded border border-gray-300 px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-300">
+          <option value="local" {% if config.calibre.mode == 'local' %}selected{% endif %}>local</option>
+          <option value="docker" {% if config.calibre.mode == 'docker' %}selected{% endif %}>docker</option>
+        </select>
       </div>
+
+      {{ path_row("calibre.library_db_path", config.calibre.library_db_path, "library_db_path",
+                  "Directory containing metadata.db.") }}
+      {{ path_row("calibre.book_file_path", config.calibre.book_file_path, "book_file_path",
+                  "Physical book files location (split-library setup). Leave blank if same as library_db_path.") }}
+
+      <div id="calibre-docker-fields" class="{{ 'hidden' if config.calibre.mode == 'local' else '' }}">
+        {{ text_row("calibre.docker_container", config.calibre.docker_container, "docker_container",
+                    placeholder="calibre-web") }}
+        <div class="grid grid-cols-[11rem_1fr] items-start gap-x-4 py-2.5 px-4 border-b border-gray-100">
+          <label for="calibre.path_map" class="text-xs text-gray-500 pt-2 leading-tight">path_map</label>
+          <div>
+            <textarea id="calibre.path_map" name="calibre.path_map" rows="3"
+                      class="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+                      placeholder="/host/path: /container/path"
+            >{% for k, v in config.calibre.path_map.items() %}{{ k }}: {{ v }}
+{% endfor %}</textarea>
+            <p class="text-xs text-gray-400 mt-1">One <code>host_path: container_path</code> mapping per line.</p>
+          </div>
+        </div>
+      </div>
+
+      {{ text_row("calibre.reconnect_url", config.calibre.reconnect_url, "reconnect_url",
+                  placeholder="http://192.168.1.10:8083/reconnect",
+                  hint="Optional: calibre-web /reconnect URL (requires -r flag).") }}
     </section>
 
     <!-- Metadata -->
@@ -80,27 +180,34 @@
       <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
         <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Metadata</h2>
       </div>
-      <div class="divide-y divide-gray-100">
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-36 flex-shrink-0">confidence_threshold</span>
-          <div class="flex items-center gap-2">
-            <div class="conf-bar" style="width:80px">
-              <div class="conf-fill {{ 'conf-hi' if config.metadata.confidence_threshold >= 0.8 else 'conf-md' if config.metadata.confidence_threshold >= 0.6 else 'conf-lo' }}" style="width:{{ (config.metadata.confidence_threshold * 100)|int }}%"></div>
-            </div>
-            <span class="text-xs font-medium">{{ config.metadata.confidence_threshold }}</span>
+
+      <!-- confidence_threshold slider -->
+      <div class="grid grid-cols-[11rem_1fr] items-center gap-x-4 py-2.5 px-4 border-b border-gray-100">
+        <label for="metadata.confidence_threshold" class="text-xs text-gray-500">confidence_threshold</label>
+        <div class="flex items-center gap-3">
+          <input type="range" id="metadata.confidence_threshold" name="metadata.confidence_threshold"
+                 min="0" max="1" step="0.01"
+                 value="{{ config.metadata.confidence_threshold }}"
+                 oninput="document.getElementById('conf-display').textContent = parseFloat(this.value).toFixed(2)"
+                 class="w-32 accent-blue-600">
+          <span id="conf-display" class="text-xs font-mono font-medium w-8">{{ "%.2f" % config.metadata.confidence_threshold }}</span>
+          <div class="conf-bar" style="width:64px">
+            <div class="conf-fill {{ 'conf-hi' if config.metadata.confidence_threshold >= 0.8 else 'conf-md' if config.metadata.confidence_threshold >= 0.6 else 'conf-lo' }}"
+                 style="width:{{ (config.metadata.confidence_threshold * 100)|int }}%"></div>
           </div>
         </div>
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-36 flex-shrink-0">duplicate_action</span>
-          <span class="text-xs font-medium">{{ config.metadata.duplicate_action }}</span>
-        </div>
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-36 flex-shrink-0">google_books_api_key</span>
-          <span class="text-xs {{ 'text-green-600 font-medium' if config.metadata.google_books_api_key else 'text-amber-600' }}">
-            {{ '••••••••' + config.metadata.google_books_api_key[-4:] if config.metadata.google_books_api_key else 'not set (60 req/min limit)' }}
-          </span>
-        </div>
       </div>
+
+      {{ select_row("metadata.duplicate_action", config.metadata.duplicate_action, "duplicate_action",
+                    [("review","review — quarantine for inspection"),
+                     ("skip","skip — discard silently"),
+                     ("import","import — always import")]) }}
+      {{ check_row("metadata.overwrite_existing", config.metadata.overwrite_existing, "overwrite_existing",
+                   "Overwrite embedded metadata tags on import.") }}
+      {{ check_row("metadata.mock_mode", config.metadata.mock_mode, "mock_mode",
+                   "Return fixture data only — no real HTTP calls. For testing.") }}
+      {{ text_row("metadata.google_books_api_key", config.metadata.google_books_api_key, "google_books_api_key",
+                  type="password", hint="Clear to remove. 60 req/min without a key.") }}
     </section>
 
     <!-- Output -->
@@ -108,20 +215,16 @@
       <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
         <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Output</h2>
       </div>
-      <div class="divide-y divide-gray-100">
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-36 flex-shrink-0">preferred_ebook_format</span>
-          <span class="text-xs font-medium">{{ config.output.preferred_ebook_format }}</span>
-        </div>
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-36 flex-shrink-0">embed_cover_art</span>
-          <span class="text-xs {{ 'text-green-600' if config.output.embed_cover_art else 'text-gray-400' }}">{{ '✓ enabled' if config.output.embed_cover_art else 'disabled' }}</span>
-        </div>
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-36 flex-shrink-0">ebook_format_policy</span>
-          <span class="text-xs font-medium">{{ config.output.ebook_format_policy }}</span>
-        </div>
-      </div>
+      {{ select_row("output.preferred_ebook_format", config.output.preferred_ebook_format,
+                    "preferred_ebook_format", [("epub","epub"),("mobi","mobi")]) }}
+      {{ select_row("output.preferred_audio_format", config.output.preferred_audio_format,
+                    "preferred_audio_format", [("m4b","m4b")]) }}
+      {{ select_row("output.ebook_format_policy", config.output.ebook_format_policy,
+                    "ebook_format_policy",
+                    [("preferred","preferred — convert to preferred format"),
+                     ("all","all — import native format as-is")]) }}
+      {{ check_row("output.embed_cover_art", config.output.embed_cover_art, "embed_cover_art",
+                   "Download and embed cover images on import.") }}
     </section>
 
     <!-- Notifications -->
@@ -129,29 +232,111 @@
       <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
         <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Notifications (ntfy)</h2>
       </div>
-      <div class="divide-y divide-gray-100">
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">enabled</span>
-          <span class="text-xs {{ 'text-green-600' if config.ntfy.enabled else 'text-gray-400' }}">{{ '✓ yes' if config.ntfy.enabled else 'no' }}</span>
-        </div>
-        {% if config.ntfy.topic %}
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">topic</span>
-          <span class="text-xs font-medium">{{ config.ntfy.topic }}</span>
-        </div>
-        <div class="flex items-center px-4 py-2.5 gap-3">
-          <span class="text-xs text-gray-500 w-32 flex-shrink-0">base_url</span>
-          <code class="text-xs text-gray-700">{{ config.ntfy.base_url }}</code>
-        </div>
-        {% endif %}
-      </div>
+      {{ check_row("ntfy.enabled", config.ntfy.enabled, "enabled") }}
+      {{ text_row("ntfy.topic", config.ntfy.topic, "topic", placeholder="my-libris-topic") }}
+      {{ text_row("ntfy.base_url", config.ntfy.base_url, "base_url", placeholder="https://ntfy.sh") }}
+      {{ text_row("ntfy.auth_token", config.ntfy.auth_token, "auth_token",
+                  type="password", hint="Optional Bearer token for private topics.") }}
     </section>
 
-  </div><!-- /space-y-6 -->
+    <!-- Multi-part -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Multi-part audiobooks</h2>
+      </div>
+      {{ number_row("multipart.timeout_hours", config.multipart.timeout_hours, "timeout_hours",
+                    step="1", min="0",
+                    hint="Hours to wait for missing parts before escalating to review.") }}
+    </section>
 
-  <p class="mt-6 text-xs text-gray-400">
-    Full config editing with directory browser and test-connection coming in Phase 2.
-  </p>
+    <!-- Log level -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Logging</h2>
+      </div>
+      {{ select_row("log_level", config.log_level, "log_level",
+                    [("DEBUG","DEBUG"),("INFO","INFO"),("WARNING","WARNING"),
+                     ("ERROR","ERROR"),("CRITICAL","CRITICAL")]) }}
+    </section>
+
+    <div class="flex items-center justify-end gap-3 py-2">
+      <button type="button" class="btn btn-ghost"
+              hx-post="/api/config/test"
+              hx-target="#test-results"
+              hx-swap="innerHTML"
+              hx-indicator="#test-spinner2">
+        <span id="test-spinner2" class="htmx-indicator">⟳</span>
+        Test config
+      </button>
+      <button type="submit" class="btn btn-primary">Save changes</button>
+    </div>
+
+  </form>
   {% endif %}
 </div>
+
+<!-- Directory browser modal -->
+<div id="dir-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+  <div class="bg-white rounded-xl shadow-2xl w-96 flex flex-col overflow-hidden" style="max-height:28rem">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 flex-shrink-0">
+      <h3 class="font-semibold text-sm">Select Directory</h3>
+      <button type="button" onclick="closeDirModal()"
+              class="text-gray-400 hover:text-gray-700 text-xl leading-none w-6 h-6 flex items-center justify-center">&times;</button>
+    </div>
+    <div id="dir-browser-body" class="flex-1 overflow-hidden">
+      <div class="flex items-center justify-center h-32 text-gray-400 text-sm">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let _dirField = null;
+
+function openDirModal(fieldId, currentPath) {
+  _dirField = fieldId;
+  const startPath = currentPath && currentPath.trim() ? currentPath.trim() : '/';
+  htmx.ajax('GET',
+    '/api/fs/browse?path=' + encodeURIComponent(startPath) + '&field=' + encodeURIComponent(fieldId),
+    { target: '#dir-browser-body', swap: 'innerHTML' }
+  );
+  document.getElementById('dir-modal').classList.remove('hidden');
+}
+
+function closeDirModal() {
+  document.getElementById('dir-modal').classList.add('hidden');
+  _dirField = null;
+}
+
+function selectDirPath(path) {
+  if (_dirField) {
+    const el = document.getElementById(_dirField);
+    if (el) el.value = path;
+  }
+  closeDirModal();
+}
+
+function createDirPrompt(parentPath, field) {
+  const name = prompt('New folder name:');
+  if (!name || !name.trim()) return;
+  htmx.ajax('POST', '/api/fs/mkdir', {
+    target: '#dir-browser-body',
+    swap: 'innerHTML',
+    values: { parent: parentPath, name: name.trim(), field: field }
+  });
+}
+
+function toggleCalibreMode(mode) {
+  const dockerFields = document.getElementById('calibre-docker-fields');
+  if (mode === 'docker') {
+    dockerFields.classList.remove('hidden');
+  } else {
+    dockerFields.classList.add('hidden');
+  }
+}
+
+document.getElementById('dir-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeDirModal();
+});
+</script>
+
 {% endblock %}

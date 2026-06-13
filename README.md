@@ -1594,7 +1594,7 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ## v0.3.18 (dev)
 
-### New: Web UI (Phase 1 — foundation)
+### New: Web UI (Phases 1 & 2)
 
 `libris web` starts a local web dashboard at `http://127.0.0.1:8888`.
 
@@ -1604,14 +1604,20 @@ libris web                         # uses auto-discovered config
 libris web --config /path/to/config.yaml --host 0.0.0.0 --port 9000
 ```
 
-Phase 1 provides:
+**Phase 1 — read-only dashboard:**
 - **Config viewer** — all settings displayed with path-exists checks and the Google Books API key masked
 - **Review queue** — lists all files awaiting human sign-off with match title, author, confidence score, and age
 - **Failed queue** — lists failed files with error messages and missing-file indicators
 - **Pending parts** — shows multi-part audiobook groups with which parts have and haven't arrived yet
 - Live badge counts in the nav update on every page load
 
-Interactive actions (accept, discard, recover, rematch) and the full config editor with directory browser are planned for Phases 2–4.
+**Phase 2 — config editor:**
+- **Full editable form** — every config setting (watcher, paths, calibre, metadata, output, ntfy, multipart) editable in-browser
+- **Directory browser modal** — click Browse on any path field to navigate the filesystem and select or create directories without leaving the page
+- **Validate before save** — config is parsed against the full dataclass schema before the file is written; validation errors are shown inline
+- **Test Config** — one-click check that verifies all directories exist, `calibredb` is reachable (or the Docker container is running), the `reconnect_url` responds, and a live ntfy notification is sent
+
+Interactive queue actions (accept, discard, recover, rematch) are planned for Phases 3–4.
 
 Requires: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `aiofiles` (all installed with `pip install pylibris[web]`).
 

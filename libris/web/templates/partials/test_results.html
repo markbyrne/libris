@@ -1,0 +1,14 @@
+<div class="space-y-1.5 text-xs">
+  {% for r in results %}
+  <div class="flex items-start gap-2 {{ 'text-green-700' if r.ok else 'text-red-600' }}">
+    <span class="mt-px flex-shrink-0 font-bold">{{ '✓' if r.ok else '✗' }}</span>
+    <span class="font-medium">{{ r.label }}</span>
+    {% if r.detail %}
+    <span class="text-gray-400 font-normal truncate">{{ r.detail }}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if not results %}
+  <div class="text-gray-400">No checks ran.</div>
+  {% endif %}
+</div>
