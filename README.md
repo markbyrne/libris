@@ -1173,6 +1173,19 @@ Libris extracts series names and indices from filenames and API metadata, and wr
 
 ---
 
+## Filename conventions
+
+Search queries are built by stripping noise from the filename (format tags, quality markers, part numbers, years, content hashes). Two structured conventions get first-class parsing:
+
+| Convention | Example | Extracted |
+|------------|---------|-----------|
+| `Title - Author` | `Caliban and the Witch - Silvia Federici.epub` | title + author hint |
+| `Title -- Author -- Year -- Publisher -- Hash` | `The Vegetarian -- Han Kang -- 2016 -- Hogarth -- 9daef8….epub` | title + author + year hints |
+
+In the double-dash convention (used by shadow-library archives) the fields are treated as authoritative: the title and author drive the search directly, the year becomes a scoring hint, and the publisher and content hash are discarded as query noise. Trailing md5/sha1/sha256 hashes are stripped from *any* filename, structured or not.
+
+---
+
 ## Confidence scoring
 
 Each file is scored against candidates from Google Books and OpenLibrary:

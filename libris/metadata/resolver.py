@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from ..cleaner import clean_query, extract_isbn
+from ..cleaner import clean_query, extract_isbn, parse_double_dash
 from ..config import MetadataConfig
 from ..exceptions import RateLimitError
 from .base import USER_AGENT, MetadataResult, SearchQuery
@@ -81,6 +81,15 @@ def resolve_metadata(
     year = _extract_year(stem)
     author_hint = _extract_author_hint(stem)
     series_hint, series_index_hint = _extract_series(stem)
+
+    # Structured " -- " convention ({title} -- {author} -- {year} --
+    # {publisher} -- {hash}): the fields are authoritative — use them
+    # instead of heuristics over the whole stem.
+    dd = parse_double_dash(stem)
+    if dd:
+        clean = clean_query(dd["title"]) or dd["title"]
+        author_hint = dd["author"] or author_hint
+        year = dd["year"] or year
 
     # For "Series N - Book Title" filenames, query by book title only.
     # "Inheritance Cycle 2 - Eldest" → query "Eldest", not "Inheritance Cycle 2 Eldest",

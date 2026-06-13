@@ -114,13 +114,17 @@ _SUBSTITUTIONS: list[tuple[re.Pattern, str]] = [
     # Year in parens or standalone: (2021), [2021], 2021
     (re.compile(r"\b(?:19|20)\d{2}\b"), ""),
 
+    # Content hashes (md5/sha1/sha256) appended by shadow-library archives
+    (re.compile(r"\b[0-9a-fA-F]{32}\b|\b[0-9a-fA-F]{40}\b|\b[0-9a-fA-F]{64}\b"), ""),
+
     # Strip trailing lowercase single-word suffix after a dash separator
     # e.g. "Book Title - sometag" — lowercase tokens are not proper author names
     (re.compile(r"\s[-–—]\s+[a-z][a-z0-9_-]*$"), ""),
 
     # Separators that typically divide title from author: " - Author", " by Author"
+    # (single dash, double dash, en/em dash)
     # We keep the content but strip the separator token itself
-    (re.compile(r"\s[-–—]\s"), " "),
+    (re.compile(r"\s(?:-{1,2}|[–—])\s"), " "),
     (re.compile(r"\bby\b", re.IGNORECASE), ""),
 
     # Underscores → spaces
@@ -145,6 +149,49 @@ def clean_query(raw: str) -> str:
     for pattern, replacement in _SUBSTITUTIONS:
         result = pattern.sub(replacement, result)
     return result.strip()
+
+
+_DOUBLE_DASH_SEP = re.compile(r"\s+--\s+")
+_HEX_HASH_FIELD = re.compile(r"^[0-9a-fA-F]{16,64}$")
+_BARE_YEAR_FIELD = re.compile(r"^(?:19|20)\d{2}$")
+
+
+def parse_double_dash(stem: str) -> dict | None:
+    """Parse the shadow-library ' -- ' field convention into structured parts.
+
+    Archives such as Anna's Archive name files
+    ``{title} -- {author} -- {year} -- {publisher} -- {md5}.ext``.
+    The generic substitution cleaner mangles these (the publisher and hash
+    pollute the search query and the author is never extracted), so the
+    resolver should consume the fields directly.
+
+    Returns ``{"title": str, "author": str|None, "year": int|None}``
+    when the stem uses the convention (two or more " -- " separators),
+    else None.  Trailing hash fields and bare-year fields are recognised
+    and consumed; the publisher field (anything after the author) is
+    deliberately dropped — it adds noise to title/author search queries.
+    """
+    fields = [f.strip() for f in _DOUBLE_DASH_SEP.split(stem) if f.strip()]
+    if len(fields) < 3:
+        return None  # "A -- B" alone is too ambiguous to call structured
+
+    year: int | None = None
+    rest: list[str] = []
+    for f in fields:
+        if _HEX_HASH_FIELD.match(f):
+            continue
+        if year is None and _BARE_YEAR_FIELD.match(f):
+            year = int(f)
+            continue
+        rest.append(f)
+
+    if not rest:
+        return None
+    return {
+        "title": rest[0],
+        "author": rest[1] if len(rest) > 1 else None,
+        "year": year,
+    }
 
 
 def extract_isbn(raw: str) -> str | None:
