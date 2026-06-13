@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylibris"
-version = "0.3.17.dev0"
+version = "0.3.18.dev0"
 description = "Intelligent book and audiobook organiser for self-hosted Calibre libraries"
 authors = [{ name = "Mark Byrne" }]
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = {text = "MIT"}
 keywords = ["calibre", "ebooks", "audiobooks", "self-hosted", "library"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -44,6 +44,9 @@ Homepage = "https://github.com/markbyrne/libris"
 Repository = "https://github.com/markbyrne/libris"
 Issues = "https://github.com/markbyrne/libris/issues"
 Changelog = "https://github.com/markbyrne/libris/releases"
+
+[tool.setuptools]
+license-files = []
 
 [tool.setuptools.packages.find]
 where = ["."]
