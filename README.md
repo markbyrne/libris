@@ -1594,6 +1594,21 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ## v0.3.18 (dev)
 
+### New: `libris library --embed-cover`
+
+Embeds a cover image directly into an ebook or audiobook file:
+
+```bash
+libris library --embed-cover book.epub            # uses cover.jpg from the same directory
+libris library --embed-cover book.m4b cover.jpg   # uses the specified image
+```
+
+- **Ebooks** (epub, mobi, azw3, …) — delegates to `ebook-meta` (Calibre), which handles all OPF/ZIP bookkeeping inside the ebook container
+- **Audiobooks** (m4b, mp3, m4a, flac, …) — uses `ffmpeg` to replace or add the cover stream; audio is stream-copied (no re-encode), existing tags and chapter markers are preserved
+- If no cover path is given, `cover.jpg` in the same directory as the book is used automatically
+
+---
+
 ### New: Web UI (Phases 1 & 2)
 
 `libris web` starts a local web dashboard at `http://127.0.0.1:8888`.

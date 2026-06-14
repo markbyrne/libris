@@ -3226,6 +3226,127 @@ def migrate_library(
 
 
 # ---------------------------------------------------------------------------
+# library — per-file operations (embed-cover, …)
+# ---------------------------------------------------------------------------
+
+def _embed_cover_audio(book_path: Path, cover_path: Path) -> None:
+    """Replace or add cover art in an audio file using ffmpeg (atomic, in-place)."""
+    import os
+
+    if not shutil.which("ffmpeg"):
+        raise click.ClickException("ffmpeg not found in PATH — required for audiobook cover embedding.")
+
+    tmp_fd, tmp_str = tempfile.mkstemp(suffix=book_path.suffix, dir=book_path.parent)
+    tmp_path = Path(tmp_str)
+    try:
+        os.close(tmp_fd)
+        cmd = [
+            "ffmpeg",
+            "-i", str(book_path),
+            "-i", str(cover_path),
+            "-map", "0:a",          # audio only from source
+            "-map", "1:v",          # cover image from cover file
+            "-map_metadata", "0",   # preserve all global tags from source
+            "-map_chapters", "0",   # preserve chapter markers
+            "-c:a", "copy",         # don't re-encode audio
+            "-c:v", "mjpeg",        # encode cover as JPEG
+            "-metadata:s:v", "title=Album cover",
+            "-metadata:s:v", "comment=Cover (front)",
+            "-disposition:v", "attached_pic",
+            str(tmp_path), "-y",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise click.ClickException(
+                f"ffmpeg failed (rc={result.returncode}):\n{result.stderr[-400:].strip()}"
+            )
+        tmp_path.replace(book_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _embed_cover_ebook(book_path: Path, cover_path: Path) -> None:
+    """Set or replace cover art in an ebook file using ebook-meta (Calibre)."""
+    if not shutil.which("ebook-meta"):
+        raise click.ClickException(
+            "ebook-meta not found in PATH — install Calibre to enable ebook cover embedding."
+        )
+    result = subprocess.run(
+        ["ebook-meta", str(book_path), f"--cover={cover_path}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"ebook-meta failed (rc={result.returncode}):\n{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+
+@main.command("library")
+@click.option(
+    "--embed-cover", "embed_cover",
+    is_flag=True, default=False,
+    help="Embed a cover image into the book file.",
+)
+@click.argument("book_file", metavar="FILE")
+@click.argument("cover_file", metavar="COVER", required=False, default=None)
+def library_cmd(embed_cover: bool, book_file: str, cover_file: str | None) -> None:
+    """Operate on individual library files.
+
+    \b
+    Embed cover art:
+
+      libris library --embed-cover book.epub
+           Uses cover.jpg from the same directory as the book.
+
+      libris library --embed-cover book.m4b /path/to/cover.jpg
+           Uses the specified cover image.
+
+    Supported formats:
+      Ebooks (epub, mobi, azw3, …) — via ebook-meta (Calibre)
+      Audiobooks (m4b, mp3, m4a, flac, …) — via ffmpeg
+    """
+    if not embed_cover:
+        raise click.UsageError("No action specified. Use --embed-cover FILE [COVER].")
+
+    book = Path(book_file)
+    if not book.exists():
+        _die(f"File not found: {book}")
+
+    cover: Path
+    if cover_file:
+        cover = Path(cover_file)
+        if not cover.exists():
+            _die(f"Cover image not found: {cover}")
+    else:
+        cover = book.parent / "cover.jpg"
+        if not cover.exists():
+            _die(
+                f"No cover image found at {cover}\n"
+                "  Place a cover.jpg alongside the book, or pass an explicit cover path:\n"
+                f"  libris library --embed-cover {book.name} /path/to/cover.jpg"
+            )
+
+    ext = book.suffix.lstrip(".").lower()
+    click.echo()
+    if ext in AUDIO_EXTENSIONS:
+        click.echo(f"  Embedding cover into {book.name}  (via ffmpeg)")
+        _embed_cover_audio(book, cover)
+    elif ext in EBOOK_EXTENSIONS:
+        click.echo(f"  Embedding cover into {book.name}  (via ebook-meta)")
+        _embed_cover_ebook(book, cover)
+    else:
+        _die(
+            f"Unsupported file type: {book.suffix}\n"
+            f"  Supported ebook formats: {', '.join(sorted(EBOOK_EXTENSIONS))}\n"
+            f"  Supported audio formats: {', '.join(sorted(AUDIO_EXTENSIONS))}"
+        )
+
+    click.echo(f"  ✅  {book.name}  ←  {cover.name}")
+    click.echo()
+
+
+# ---------------------------------------------------------------------------
 # Web UI
 # ---------------------------------------------------------------------------
 
