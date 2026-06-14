@@ -49,7 +49,7 @@ Your files             Libris                   Calibre DB         Reader App
 - **Confidence scoring** — two independent metadata sources cross-checked before import
 - **Full metadata** — title, author, cover art, description, publisher, series, language, ISBN all written to Calibre; placeholder/junk cover images are rejected via content-type, size, and dimension checks
 - **Series detection** — extracts series name and index from filenames and API data; writes tags for Apple Books, Prologue, and AudioBookshelf
-- **Anna's Archive filename parsing** — structured `title -- author -- year -- publisher -- md5` filenames are parsed field-by-field; extracts ISBN, series/ordinal, narrator, and author initials (AA encodes `D.J.` as `D_ J_`) before the metadata lookup, yielding near-perfect confidence scores for these files
+- **Structured filename parsing** — files named with the `title -- author -- year -- publisher -- md5` double-dash convention are parsed field-by-field; extracts ISBN, series/ordinal, narrator, and author initials (the convention encodes `D.J.` as `D_ J_`) before the metadata lookup, yielding near-perfect confidence scores for these files
 - **Review queue** — low-confidence matches held for your approval, never silently wrong
 - **Interactive rematch** — re-query metadata APIs from the terminal with live score breakdowns
 - **Web search fallback** — if both APIs return no results, DuckDuckGo Instant Answers is queried for author/ISBN hints and the search is retried automatically
@@ -1183,7 +1183,7 @@ Search queries are built by stripping noise from the filename (format tags, qual
 | `Title - Author` | `Caliban and the Witch - Silvia Federici.epub` | title + author hint |
 | `Title -- Author -- Year -- Publisher -- Hash` | `The Vegetarian -- Han Kang -- 2016 -- Hogarth -- 9daef8….epub` | title + author + year hints |
 
-In the double-dash convention (used by shadow-library archives) the fields are treated as authoritative: the title and author drive the search directly, the year becomes a scoring hint, and the publisher and content hash are discarded as query noise. Trailing md5/sha1/sha256 hashes are stripped from *any* filename, structured or not.
+In the double-dash convention the fields are treated as authoritative: the title and author drive the search directly, the year becomes a scoring hint, and the publisher and content hash are discarded as query noise. Trailing md5/sha1/sha256 hashes are stripped from *any* filename, structured or not.
 
 ---
 

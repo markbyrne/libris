@@ -115,7 +115,7 @@ _SUBSTITUTIONS: list[tuple[re.Pattern, str]] = [
     # Year in parens or standalone: (2021), [2021], 2021
     (re.compile(r"\b(?:19|20)\d{2}\b"), ""),
 
-    # Content hashes (md5/sha1/sha256) appended by shadow-library archives
+    # Trailing content hashes (md5/sha1/sha256) found in structured filenames
     (re.compile(r"\b[0-9a-fA-F]{32}\b|\b[0-9a-fA-F]{40}\b|\b[0-9a-fA-F]{64}\b"), ""),
 
     # Strip trailing lowercase single-word suffix after a dash separator
@@ -169,8 +169,8 @@ _WORD_ORDINALS: dict[str, int] = {
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
     "nineteen": 19, "twenty": 20,
 }
-# Source-attribution strings that appear as trailing fields in Anna's Archive
-# filenames.  These are consumed so they never end up in title/author.
+# Known trailing attribution or source-tag strings in structured filenames.
+# These are consumed so they never end up in title/author.
 _ATTRIBUTION_STRINGS: frozenset[str] = frozenset({
     "anna's archive",
     "z-library",
@@ -182,10 +182,10 @@ _ATTRIBUTION_STRINGS: frozenset[str] = frozenset({
 
 
 def _aa_undot(s: str) -> str:
-    """Reverse Anna's Archive dot→underscore encoding in a name field.
+    """Reverse the dot→underscore encoding used in structured filename conventions for name fields.
 
-    AA replaces dots with underscores in author initials and adds a space
-    between each initial: "D.J. MacHale" → "D_ J_ MacHale".
+    The convention replaces dots with underscores in author initials and adds a
+    space between each initial: "D.J. MacHale" → "D_ J_ MacHale".
 
     Two passes:
     1. Absorb the inter-initial space: "D_ J_" → "D.J_"  (lookahead ensures
@@ -208,9 +208,9 @@ class DoubleDashResult(TypedDict):
 
 
 def parse_double_dash(stem: str) -> DoubleDashResult | None:
-    """Parse the shadow-library ' -- ' field convention into structured parts.
+    """Parse the ' -- ' double-dash field convention into structured parts.
 
-    Archives such as Anna's Archive name files
+    Files using this convention are named with fields separated by ' -- ':
     ``{title} -- {author} -- {year} -- {publisher} -- {md5}.ext``.
     The generic substitution cleaner mangles these (the publisher and hash
     pollute the search query and the author is never extracted), so the
