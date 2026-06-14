@@ -11,9 +11,8 @@ from pathlib import Path
 import click
 import yaml
 
-from ..config import load_config
 from ..exceptions import ConfigError, RateLimitError
-from ..state import FileRecord, FileState, StateStore
+from ..state import FileState, StateStore
 from ._helpers import (
     _hr,
     _live_review_records,

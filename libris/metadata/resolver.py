@@ -7,12 +7,13 @@ import logging
 import os
 import re
 import signal
+import threading
 from pathlib import Path
 
 import httpx
 
 from .._constants import HTTP_TIMEOUT_API, HTTP_TIMEOUT_COVER
-from ..cleaner import DoubleDashResult, clean_query, extract_isbn, parse_double_dash
+from ..cleaner import clean_query, extract_isbn, parse_double_dash
 from ..config import MetadataConfig
 from ..exceptions import RateLimitError
 from .base import USER_AGENT, MetadataResult, SearchQuery
@@ -49,8 +50,7 @@ def _sigterm_handler(signum: int, frame: object) -> None:  # noqa: ARG001
 
 
 atexit.register(_cleanup_cover_temps)
-import threading as _threading
-if _threading.current_thread() is _threading.main_thread():
+if threading.current_thread() is threading.main_thread():
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
 

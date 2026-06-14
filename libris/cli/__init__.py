@@ -33,13 +33,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
 import httpx
-import yaml
 
 from .._constants import HTTP_TIMEOUT_API, HTTP_TIMEOUT_SHORT
 from ..calibre import get_calibre
@@ -49,7 +47,7 @@ from ..cleaner import clean_query as _clean_query
 from ..cleaner import is_chaff as _is_chaff
 from ..cleaner import strip_part_marker as _strip_part_marker
 from ..config import load_config
-from ..exceptions import ConfigError, RateLimitError
+from ..exceptions import RateLimitError
 from ..metadata import resolve_metadata
 from ..metadata.base import MetadataResult, SearchQuery
 from ..metadata.resolver import (
@@ -61,17 +59,27 @@ from ..metadata.resolver import (
 )
 from ..metadata.scorer import dedup_candidates
 from ..pipeline import Pipeline
-from ..state import FileRecord, FileState, StateStore
+from ..state import FileRecord, FileState
 from ._helpers import (
-    _fmt_age, _has_match, _hr, _hyperlink,
-    _live_review_records, _render_failed_list,
-    _render_review_hints, _render_review_record,
+    _fmt_age,
+    _has_match,
+    _hr,
+    _live_review_records,
+    _render_failed_list,
+    _render_review_hints,
+    _render_review_record,
 )
 from ._setup import (
-    _CONFIG_OPTION, _calibredb_list, _die, _open_store,
-    _prompt_add_google_key, _prompt_rate_limit, _resolve_config,
-    _save_google_api_key, _setup_logging, _show_queue_summary,
-    _update_config_calibre_split, _update_config_paths,
+    _CONFIG_OPTION,
+    _calibredb_list,
+    _die,
+    _open_store,
+    _prompt_rate_limit,
+    _resolve_config,
+    _setup_logging,
+    _show_queue_summary,
+    _update_config_calibre_split,
+    _update_config_paths,
 )
 
 # Dot-prefixed book-format extensions, for Path.suffix comparison when
