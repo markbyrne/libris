@@ -49,7 +49,9 @@ def _sigterm_handler(signum: int, frame: object) -> None:  # noqa: ARG001
 
 
 atexit.register(_cleanup_cover_temps)
-signal.signal(signal.SIGTERM, _sigterm_handler)
+import threading as _threading
+if _threading.current_thread() is _threading.main_thread():
+    signal.signal(signal.SIGTERM, _sigterm_handler)
 
 
 def resolve_metadata(

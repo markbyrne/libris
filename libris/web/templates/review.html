@@ -2,7 +2,7 @@
 {% block title %}Review — Libris{% endblock %}
 {% block content %}
 <div class="max-w-5xl">
-  <div class="flex items-center gap-4 mb-6">
+  <div class="flex items-center gap-4 mb-5">
     <h1 class="text-xl font-bold">Review Queue</h1>
     {% if records %}
     <span class="bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-0.5 rounded-full">{{ records|length }}</span>
@@ -43,18 +43,26 @@
       </thead>
       <tbody>
         {% for r in records %}
-        <tr class="{{ 'bg-amber-50' if r._is_dup else '' }}">
+        <tr id="row-{{ r.id }}"
+            class="{{ 'bg-amber-50' if r._is_dup else '' }}"
+            hx-swap="outerHTML swap:200ms">
           <td class="text-xs text-gray-400 text-center">{{ loop.index }}</td>
           <td class="max-w-xs">
-            <div class="text-xs font-mono text-gray-600 truncate" title="{{ r.current_path }}">{{ r.current_path | replace(r.current_path | replace(r.current_path.split('/')[-1], ''), '') }}</div>
+            <div class="text-xs font-mono text-gray-600 truncate" title="{{ r.current_path }}">
+              {{ r.current_path.split('/')[-1] }}
+            </div>
             {% if r._is_dup %}
-            <div class="text-xs text-amber-700 mt-0.5">⚠ {{ r.error_msg }}</div>
+            <div class="text-xs text-amber-700 mt-0.5 truncate" title="{{ r.error_msg }}">⚠ {{ r.error_msg }}</div>
             {% endif %}
           </td>
           <td class="max-w-xs">
             {% if r.matched_title %}
             <div class="text-sm font-medium truncate">{{ r.matched_title }}</div>
-            {% if r.matched_author %}<div class="text-xs text-gray-500 truncate">{{ r.matched_author }}{% if r.matched_year %} · {{ r.matched_year }}{% endif %}</div>{% endif %}
+            {% if r.matched_author %}
+            <div class="text-xs text-gray-500 truncate">
+              {{ r.matched_author }}{% if r.matched_year %} · {{ r.matched_year }}{% endif %}
+            </div>
+            {% endif %}
             {% else %}
             <span class="text-xs text-red-500">No match found</span>
             {% endif %}
@@ -68,7 +76,7 @@
             <span class="tag tag-ebook">ebook</span>
             {% endif %}
           </td>
-          <td class="text-right">
+          <td>
             {% if r.confidence is not none %}
             <div class="flex items-center gap-1.5">
               <span class="conf-bar"><span class="conf-fill {{ 'conf-hi' if r.confidence >= 0.8 else 'conf-md' if r.confidence >= 0.6 else 'conf-lo' }}" style="width:{{ (r.confidence * 100)|int }}%"></span></span>
@@ -80,11 +88,29 @@
           </td>
           <td class="text-xs text-gray-400 whitespace-nowrap">{{ r._age }}</td>
           <td>
-            <div class="flex items-center gap-1.5">
-              {% if r.matched_metadata_json %}
-              <span class="text-xs text-gray-400 italic">use CLI to accept</span>
+            <div class="flex items-center gap-1">
+              {% if r._has_match %}
+              <button type="button" class="btn btn-green btn-sm"
+                      hx-post="/api/review/{{ r.id }}/accept"
+                      hx-target="#row-{{ r.id }}"
+                      hx-swap="outerHTML swap:200ms"
+                      title="Force-import using cached metadata">
+                Accept
+              </button>
+              {% else %}
+              <button type="button" class="btn btn-ghost btn-sm" disabled
+                      title="No metadata match yet — run: libris rematch --id {{ loop.index }}"
+                      style="opacity:0.4;cursor:not-allowed">
+                Accept
+              </button>
               {% endif %}
-              <code class="text-xs text-gray-400">--id {{ loop.index }}</code>
+              <button type="button" class="btn btn-danger btn-sm"
+                      hx-post="/api/review/{{ r.id }}/discard"
+                      hx-target="#row-{{ r.id }}"
+                      hx-swap="outerHTML swap:200ms"
+                      hx-confirm="Delete '{{ r.current_path.split('/')[-1] }}' from disk?">
+                Discard
+              </button>
             </div>
           </td>
         </tr>
@@ -93,17 +119,11 @@
     </table>
   </div>
 
-  <div class="mt-4 p-3 bg-white rounded-lg border border-gray-200">
-    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">CLI quick reference</p>
-    <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600 font-mono">
-      <div>libris review-accept --id &lt;N&gt;</div>
-      <div>libris review-discard --id &lt;N&gt;</div>
-      <div>libris review-accept --accept-all</div>
-      <div>libris rematch --id &lt;N&gt;</div>
-      <div>libris show-cover --id &lt;N&gt;</div>
-      <div>libris review-discard --duplicates</div>
-    </div>
-    <p class="text-xs text-gray-400 mt-2">One-click actions coming in Phase 4.</p>
+  <div class="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200 text-xs text-gray-500">
+    <span class="font-semibold">Tip:</span>
+    Accept imports using cached metadata (no API call). A greyed-out Accept means no match found yet —
+    rematch via CLI: <code class="bg-gray-100 px-1 rounded">libris rematch --id N</code>.
+    Discard permanently deletes the file.
   </div>
 
   {% endif %}

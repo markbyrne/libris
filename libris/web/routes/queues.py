@@ -1,7 +1,9 @@
-"""Queue view routes — review, failed, pending."""
+"""Queue view routes — review, failed, pending — plus inline action endpoints."""
 
 from __future__ import annotations
 
+import html as _html
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +14,10 @@ from ._common import base_ctx, templates
 
 router = APIRouter()
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _fmt_age(dt: datetime) -> str:
     """Human-readable age string for a record timestamp."""
@@ -35,6 +41,26 @@ def _open_store(config_path: Path):
     return StateStore(config.paths.state_db)
 
 
+def _row_removed() -> HTMLResponse:
+    """Empty response — HTMX outerHTML swap removes the row from the DOM."""
+    return HTMLResponse("")
+
+
+def _row_error(record_id: str, msg: str, colspan: int = 7) -> HTMLResponse:
+    """Replacement <tr> showing an inline error after a failed action."""
+    safe = _html.escape(msg)
+    html = (
+        f'<tr id="row-{record_id}" class="bg-red-50">'
+        f'<td colspan="{colspan}" class="px-4 py-2 text-xs text-red-600 font-medium">'
+        f'&#x2717; {safe}</td></tr>'
+    )
+    return HTMLResponse(html)
+
+
+# ---------------------------------------------------------------------------
+# Page routes
+# ---------------------------------------------------------------------------
+
 @router.get("/review", response_class=HTMLResponse)
 def review_page(request: Request):
     from ...state import FileState
@@ -49,6 +75,7 @@ def review_page(request: Request):
         for r in live:
             r._age = _fmt_age(r.created_at)  # type: ignore[attr-defined]
             r._is_dup = bool(r.error_msg and r.error_msg.startswith("Duplicate:"))  # type: ignore[attr-defined]
+            r._has_match = bool(r.matched_metadata_json)  # type: ignore[attr-defined]
         store.close()
         ctx["records"] = live
         ctx["stale_count"] = stale_count
@@ -114,3 +141,134 @@ def pending_page(request: Request):
         ctx["groups"] = []
         ctx["error"] = str(exc)
     return templates.TemplateResponse(request, "pending.html", ctx)
+
+
+# ---------------------------------------------------------------------------
+# Action routes — review queue
+# ---------------------------------------------------------------------------
+
+@router.post("/api/review/{record_id}/discard", response_class=HTMLResponse)
+def api_review_discard(record_id: str, request: Request):
+    """Delete a review-queue file and mark it as discarded."""
+    from ...config import load_config
+    from ...state import FileState, StateStore
+
+    config_path = request.app.state.config_path
+    try:
+        cfg = load_config(config_path)
+        store = StateStore(cfg.paths.state_db)
+        record = store.get(record_id)
+        if not record:
+            store.close()
+            return _row_error(record_id, "Record not found")
+        name = Path(record.current_path).name
+        Path(record.current_path).unlink(missing_ok=True)
+        record.state = FileState.IMPORTED
+        record.error_msg = f"Discarded via web UI (was: review/{name})"
+        store.upsert(record)
+        store.close()
+        return _row_removed()
+    except Exception as exc:
+        return _row_error(record_id, str(exc))
+
+
+@router.post("/api/review/{record_id}/accept", response_class=HTMLResponse)
+def api_review_accept(record_id: str, request: Request):
+    """Force-import a review-queue file using its cached metadata."""
+    from ...config import load_config
+    from ...pipeline import Pipeline
+    from ...state import FileState, StateStore
+
+    config_path = request.app.state.config_path
+    try:
+        cfg = load_config(config_path)
+        store = StateStore(cfg.paths.state_db)
+        record = store.get(record_id)
+        store.close()
+        if not record:
+            return _row_error(record_id, "Record not found")
+        if not record.matched_metadata_json:
+            return _row_error(
+                record_id,
+                "No metadata match yet — rematch via CLI: libris rematch --id N",
+            )
+        # Force through any duplicate check — user explicitly chose to accept
+        cfg.metadata.duplicate_action = "import"
+        pipeline = Pipeline(cfg)
+        try:
+            result = pipeline.import_from_record(record)
+        finally:
+            try:
+                pipeline._store.close()
+            except Exception:
+                pass
+        if result.state == FileState.IMPORTED:
+            return _row_removed()
+        return _row_error(
+            record_id,
+            result.error_msg or f"Unexpected state after import: {result.state.value}",
+        )
+    except Exception as exc:
+        return _row_error(record_id, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Action routes — failed queue
+# ---------------------------------------------------------------------------
+
+@router.post("/api/failed/{record_id}/recover", response_class=HTMLResponse)
+def api_failed_recover(record_id: str, request: Request):
+    """Move a failed file back to review/ for re-processing."""
+    from ...config import load_config
+    from ...state import FileState, StateStore
+
+    config_path = request.app.state.config_path
+    try:
+        cfg = load_config(config_path)
+        store = StateStore(cfg.paths.state_db)
+        record = store.get(record_id)
+        if not record:
+            store.close()
+            return _row_error(record_id, "Record not found", colspan=6)
+        current = Path(record.current_path)
+        if not current.exists():
+            store.close()
+            return _row_error(record_id, "File missing from disk — use Remove", colspan=6)
+        review_dir = cfg.paths.review_dir
+        review_dir.mkdir(parents=True, exist_ok=True)
+        dest = review_dir / current.name
+        if dest.exists():
+            dest = review_dir / f"{current.stem}_recovered{current.suffix}"
+        shutil.move(str(current), str(dest))
+        record.state = FileState.REVIEW
+        record.current_path = str(dest)
+        record.error_msg = None
+        store.upsert(record)
+        store.close()
+        return _row_removed()
+    except Exception as exc:
+        return _row_error(record_id, str(exc), colspan=6)
+
+
+@router.post("/api/failed/{record_id}/remove", response_class=HTMLResponse)
+def api_failed_remove(record_id: str, request: Request):
+    """Permanently delete a failed file and remove its record."""
+    from ...config import load_config
+    from ...state import FileState, StateStore
+
+    config_path = request.app.state.config_path
+    try:
+        cfg = load_config(config_path)
+        store = StateStore(cfg.paths.state_db)
+        record = store.get(record_id)
+        if not record:
+            store.close()
+            return _row_error(record_id, "Record not found", colspan=6)
+        Path(record.current_path).unlink(missing_ok=True)
+        record.state = FileState.IMPORTED
+        record.error_msg = "Removed via web UI"
+        store.upsert(record)
+        store.close()
+        return _row_removed()
+    except Exception as exc:
+        return _row_error(record_id, str(exc), colspan=6)

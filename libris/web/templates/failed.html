@@ -2,7 +2,7 @@
 {% block title %}Failed — Libris{% endblock %}
 {% block content %}
 <div class="max-w-4xl">
-  <div class="flex items-center gap-4 mb-6">
+  <div class="flex items-center gap-4 mb-5">
     <h1 class="text-xl font-bold">Failed Queue</h1>
     {% if records %}
     <span class="bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-0.5 rounded-full">{{ records|length }}</span>
@@ -30,12 +30,14 @@
           <th>Error</th>
           <th>Type</th>
           <th>Age</th>
-          <th>Status</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for r in records %}
-        <tr class="{{ 'opacity-60' if not r._exists else '' }}">
+        <tr id="row-{{ r.id }}"
+            class="{{ 'opacity-60' if not r._exists else '' }}"
+            hx-swap="outerHTML swap:200ms">
           <td class="text-xs text-gray-400 text-center">{{ loop.index }}</td>
           <td class="max-w-xs">
             <div class="text-xs font-mono text-gray-700 truncate font-medium" title="{{ r.current_path }}">
@@ -61,7 +63,30 @@
           </td>
           <td class="text-xs text-gray-400 whitespace-nowrap">{{ r._age }}</td>
           <td>
-            <code class="text-xs text-gray-400">--id {{ loop.index }}</code>
+            <div class="flex items-center gap-1">
+              {% if r._exists %}
+              <button type="button" class="btn btn-amber btn-sm"
+                      hx-post="/api/failed/{{ r.id }}/recover"
+                      hx-target="#row-{{ r.id }}"
+                      hx-swap="outerHTML swap:200ms"
+                      title="Move back to review/ for re-processing">
+                Recover
+              </button>
+              {% else %}
+              <button type="button" class="btn btn-ghost btn-sm" disabled
+                      title="File missing — cannot recover"
+                      style="opacity:0.4;cursor:not-allowed">
+                Recover
+              </button>
+              {% endif %}
+              <button type="button" class="btn btn-danger btn-sm"
+                      hx-post="/api/failed/{{ r.id }}/remove"
+                      hx-target="#row-{{ r.id }}"
+                      hx-swap="outerHTML swap:200ms"
+                      hx-confirm="Permanently delete '{{ r.current_path.split('/')[-1] }}'?">
+                Remove
+              </button>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -69,17 +94,10 @@
     </table>
   </div>
 
-  <div class="mt-4 p-3 bg-white rounded-lg border border-gray-200">
-    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">CLI quick reference</p>
-    <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600 font-mono">
-      <div>libris recover --id &lt;N&gt;</div>
-      <div>libris remove --id &lt;N&gt;</div>
-      <div>libris recover --all</div>
-      <div>libris remove --chaff</div>
-      <div>libris list-failed</div>
-      <div>libris remove --all</div>
-    </div>
-    <p class="text-xs text-gray-400 mt-2">One-click actions coming in Phase 4.</p>
+  <div class="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200 text-xs text-gray-500">
+    <span class="font-semibold">Tip:</span>
+    Recover moves the file back to <code class="bg-gray-100 px-1 rounded">review/</code> so it can be
+    rematched and re-imported. Remove deletes the file from disk permanently.
   </div>
 
   {% endif %}

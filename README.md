@@ -1617,7 +1617,15 @@ libris web --config /path/to/config.yaml --host 0.0.0.0 --port 9000
 - **Validate before save** — config is parsed against the full dataclass schema before the file is written; validation errors are shown inline
 - **Test Config** — one-click check that verifies all directories exist, `calibredb` is reachable (or the Docker container is running), the `reconnect_url` responds, and a live ntfy notification is sent
 
-Interactive queue actions (accept, discard, recover, rematch) are planned for Phases 3–4.
+**Phases 3 & 4 — queue actions:**
+- **Accept** — one-click force-import from the review queue using cached metadata (no API call, no new quota used)
+- **Discard** — permanently delete a review-queue file and mark it so it won't be re-imported
+- **Recover** — move a failed file back to `review/` for rematching and re-import
+- **Remove** — permanently delete a failed file and clear its record
+- Actions update the table row inline via HTMX; no full-page reload required
+- Greyed-out Accept button indicates no metadata match yet — use `libris rematch --id N` then refresh
+
+Combine-parts actions for the pending queue are planned for a future phase.
 
 Requires: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `aiofiles` (all installed with `pip install pylibris[web]`).
 
