@@ -1594,6 +1594,19 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ## v0.3.18 (dev)
 
+### Fixed: audiobook duplicates marked FAILED instead of prompting
+
+`review-accept` on an audiobook already in Calibre could fail hard with a raw
+`calibredb refused to add … already exist in the database` error and land the
+file in the failed queue. calibredb's add-time duplicate detection matches on
+**title alone**, so it rejects files that Libris's author-aware duplicate
+search misses (e.g. when the existing book's author is stored differently).
+The pipeline now catches that rejection and routes the file back to `review/`
+flagged as a duplicate, so the CLI shows the overwrite / discard / skip /
+rematch prompt as intended.
+
+---
+
 ### New: `libris library --embed-cover`
 
 Embeds a cover image directly into an ebook or audiobook file:

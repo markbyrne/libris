@@ -205,3 +205,82 @@ class TestForceImportAudioGuard:
             "title": "Project Hail Mary",
             "authors": "Andy Weir",
         }
+
+
+# ---------------------------------------------------------------------------
+# force_import — calibredb title-only duplicate rejection re-routes to REVIEW
+# ---------------------------------------------------------------------------
+
+class TestForceImportCalibredbDuplicateReroute:
+    """When calibredb's own (title-only) dup detection rejects an add that our
+    author-aware search missed, force_import must re-route to REVIEW — not FAILED —
+    so the CLI can prompt the user to overwrite/discard/skip/rematch.
+    """
+
+    def _make_pipeline(self, *, by_title_ids: list[int]):
+        from libris.exceptions import CalibreImportError
+        from libris.pipeline import Pipeline
+
+        # Author-aware search misses (author differs); title-only search hits.
+        def _search(query):
+            return [] if "authors:" in query else by_title_ids
+
+        mock_calibre = MagicMock()
+        mock_calibre.search.side_effect = _search
+        mock_calibre.add_book.side_effect = CalibreImportError(
+            "calibredb refused to add Book.m4b: The following books were not "
+            "added as they already exist in the database:\n  The Gate of the Feral Gods"
+        )
+
+        cfg = MagicMock()
+        cfg.metadata.mock_mode = False
+        cfg.metadata.duplicate_action = "skip"
+        cfg.output.embed_cover_art = False
+
+        mock_classifier = MagicMock()
+        mock_classifier.classify.return_value = MediaType.AUDIOBOOK
+
+        pipeline = Pipeline.__new__(Pipeline)
+        pipeline._calibre = mock_calibre
+        pipeline.config = cfg
+        pipeline._store = MagicMock()
+        pipeline._classifier = mock_classifier
+        pipeline._notifier = MagicMock()
+        return pipeline, mock_calibre
+
+    def _result(self):
+        result = MagicMock()
+        result.title = "The Gate of the Feral Gods"
+        result.author = "Matt Dinniman"
+        result.cover_path = None
+        return result
+
+    def test_rejected_add_routes_to_review_with_dup_ids(self, tmp_path):
+        pipeline, mock_calibre = self._make_pipeline(by_title_ids=[21])
+        m4b = tmp_path / "feral_gods.m4b"
+        m4b.write_bytes(b"fake")
+
+        with patch("libris.pipeline.audio_tag"), \
+             patch("libris.pipeline._apply_metadata_to_record"), \
+             patch.object(pipeline, "_get_or_create_record", return_value=_fake_record(m4b)):
+            ret = pipeline.force_import(m4b, self._result())
+
+        assert ret.state == FileState.REVIEW, f"expected REVIEW, got {ret.state}"
+        assert ret.error_msg and ret.error_msg.startswith("Duplicate:")
+        assert "21" in ret.error_msg
+        # File must NOT be marked failed
+        assert ret.state != FileState.FAILED
+
+    def test_rejected_add_routes_to_review_even_without_dup_ids(self, tmp_path):
+        """Title-only fallback search also misses → still REVIEW, generic dup msg."""
+        pipeline, mock_calibre = self._make_pipeline(by_title_ids=[])
+        m4b = tmp_path / "feral_gods.m4b"
+        m4b.write_bytes(b"fake")
+
+        with patch("libris.pipeline.audio_tag"), \
+             patch("libris.pipeline._apply_metadata_to_record"), \
+             patch.object(pipeline, "_get_or_create_record", return_value=_fake_record(m4b)):
+            ret = pipeline.force_import(m4b, self._result())
+
+        assert ret.state == FileState.REVIEW
+        assert ret.error_msg and ret.error_msg.startswith("Duplicate:")

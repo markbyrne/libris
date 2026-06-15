@@ -28,7 +28,7 @@ from .classifier import EBOOK_EXTENSIONS, Classifier, MediaType
 from .cleaner import clean_query, extract_part, is_chaff, strip_part_marker
 from .config import Config
 from .ebook import converter as ebook_conv
-from .exceptions import BookPipelineError
+from .exceptions import BookPipelineError, CalibreImportError
 from .metadata import resolve_metadata
 from .metadata.base import BookCandidate, MetadataResult, ScoredCandidate, SearchQuery
 from .notifier import Notifier
@@ -364,7 +364,41 @@ class Pipeline:
             if media_type == MediaType.AUDIOBOOK:
                 audio_tag.embed_metadata(path, result, overwrite=True)
 
-            book_id = self._calibre.add_book(path, **_add_book_args(result))
+            try:
+                book_id = self._calibre.add_book(path, **_add_book_args(result))
+            except CalibreImportError as exc:
+                # calibredb's own duplicate detection matches on TITLE ALONE
+                # (ignoring author), so it can reject a file that our
+                # _find_calibre_duplicates() missed because the author differs.
+                # Re-route to review/ with a duplicate flag so the CLI prompts
+                # the user, instead of marking the file FAILED.
+                if "already exist" not in str(exc) and "not added" not in str(exc):
+                    raise
+                dup_ids = self._find_calibre_duplicates_by_title(result.title)
+                incoming_fmt = path.suffix.lstrip(".").lower()
+                record.state = FileState.REVIEW
+                _apply_metadata_to_record(record, result)
+                if dup_ids:
+                    id_str = ", ".join(str(i) for i in dup_ids[:3])
+                    id_suffix = f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
+                    record.error_msg = (
+                        f"Duplicate: already in Calibre as {incoming_fmt.upper()} "
+                        f"(ID{'s' if len(dup_ids) > 1 else ''}: {id_str}{id_suffix})"
+                    )
+                else:
+                    record.error_msg = (
+                        f"Duplicate: Calibre already has a book titled "
+                        f"\"{result.title}\""
+                    )
+                self._store.upsert(record)
+                log.info(
+                    "pipeline.force_import_duplicate_blocked_by_calibredb",
+                    extra={"title": result.title, "dup_ids": dup_ids},
+                )
+                if result.cover_path and result.cover_path.exists():
+                    result.cover_path.unlink(missing_ok=True)
+                return record
+
             record.calibre_book_id = book_id
             if result.cover_path:
                 self._calibre.set_cover(book_id, result.cover_path)
@@ -1207,6 +1241,23 @@ class Pipeline:
             log.warning("pipeline.duplicate_check_series_strip_failed: %s", exc)
 
         return ids
+
+    def _find_calibre_duplicates_by_title(self, title: str) -> list[int]:
+        """Search Calibre for existing books by exact title only (no author).
+
+        Mirrors calibredb's own add-time duplicate detection, which matches on
+        title alone.  Used as a fallback after calibredb rejects an add as a
+        duplicate that the author-aware _find_calibre_duplicates() missed.
+        Returns [] on any failure — best-effort, never crashes the pipeline.
+        """
+        if not title:
+            return []
+        safe_title = title.replace('"', '\\"')
+        try:
+            return list(self._calibre.search(f'title:"={safe_title}"'))
+        except Exception as exc:
+            log.warning("pipeline.duplicate_check_by_title_failed: %s", exc)
+            return []
 
     def _find_fuzzy_duplicates(self, title: str, author: str) -> list[dict]:
         """Return Calibre books that are near-matches (85–99% similarity) but not exact.
