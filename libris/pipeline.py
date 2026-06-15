@@ -278,6 +278,29 @@ class Pipeline:
 
                     elif self.config.metadata.duplicate_action == "import":
                         # Same format + --overwrite: replace existing format
+                        # Audio formats cannot use add_format — treat like same-format
+                        # without overwrite and return to review so user can choose
+                        _is_audio = incoming_fmt in audio_conv.AUDIO_EXTENSIONS
+                        if _is_audio:
+                            id_str = ", ".join(str(i) for i in dup_ids[:3])
+                            id_suffix = (
+                                f" (and {len(dup_ids) - 3} more)" if len(dup_ids) > 3 else ""
+                            )
+                            record.state = FileState.REVIEW
+                            _apply_metadata_to_record(record, result)
+                            record.error_msg = (
+                                f"Duplicate: already in Calibre as {incoming_fmt.upper()} "
+                                f"(ID{'s' if len(dup_ids) > 1 else ''}: "
+                                f"{id_str}{id_suffix})"
+                            )
+                            self._store.upsert(record)
+                            log.info(
+                                "pipeline.force_import_duplicate_blocked",
+                                extra={"book_id": dup_ids[0], "title": result.title},
+                            )
+                            if result.cover_path and result.cover_path.exists():
+                                result.cover_path.unlink(missing_ok=True)
+                            return record
                         try:
                             if media_type == MediaType.AUDIOBOOK:
                                 audio_tag.embed_metadata(path, result, overwrite=True)
