@@ -81,6 +81,7 @@ def _make_pipeline(cfg, tmp_path=None):
     mock_cal.set_cover.return_value = None
     pipeline._calibre = mock_cal
     pipeline._store = MagicMock()
+    pipeline._store.find_directive.return_value = None
     return pipeline
 
 

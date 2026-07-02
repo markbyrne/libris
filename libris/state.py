@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -107,6 +107,22 @@ CREATE TABLE IF NOT EXISTS files (
 );
 """
 
+_CREATE_DIRECTIVES_TABLE = """
+CREATE TABLE IF NOT EXISTS directives (
+    id            TEXT PRIMARY KEY,
+    filename      TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    source        TEXT,
+    confidence    REAL,
+    created_at    TEXT NOT NULL,
+    consumed_at   TEXT
+);
+"""
+
+_CREATE_DIRECTIVES_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_directives_filename ON directives(filename);
+"""
+
 _UPSERT = """
 INSERT INTO files
     (id, original_path, current_path, media_type, state,
@@ -154,6 +170,8 @@ class StateStore:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute(_CREATE_TABLE)
+            self._conn.execute(_CREATE_DIRECTIVES_TABLE)
+            self._conn.execute(_CREATE_DIRECTIVES_INDEX)
         except sqlite3.DatabaseError as exc:
             raise ConfigError(
                 f"State DB at '{db_path}' is corrupt or unreadable ({exc}). "
@@ -335,6 +353,64 @@ class StateStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    # ------------------------------------------------------------------
+    # Directives — external tools (e.g. Librarr) pre-registering a match
+    # ------------------------------------------------------------------
+
+    def add_directive(
+        self,
+        directive_id: str,
+        filename: str,
+        metadata_json: str,
+        source: str | None = None,
+        confidence: float | None = None,
+    ) -> None:
+        """Persist a directive, superseding any unconsumed directive for the
+        same filename (newest wins — the old one is deleted).
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "DELETE FROM directives WHERE filename = ? AND consumed_at IS NULL",
+            (filename,),
+        )
+        self._conn.execute(
+            "INSERT INTO directives "
+            "(id, filename, metadata_json, source, confidence, created_at, consumed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, NULL)",
+            (directive_id, filename, metadata_json, source, confidence, now),
+        )
+
+    def find_directive(self, filename: str) -> sqlite3.Row | None:
+        """Return the newest unconsumed directive for *filename*, or None."""
+        return self._conn.execute(
+            "SELECT * FROM directives WHERE filename = ? AND consumed_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (filename,),
+        ).fetchone()
+
+    def mark_directive_consumed(self, directive_id: str) -> None:
+        """Mark a directive as consumed so it is never matched again."""
+        self._conn.execute(
+            "UPDATE directives SET consumed_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), directive_id),
+        )
+
+    def purge_stale_directives(self, older_than_hours: float = 48) -> int:
+        """Delete unconsumed directives older than *older_than_hours*.
+
+        Returns the number of rows deleted. Housekeeping for directives an
+        external tool registered but whose file never arrived (or arrived
+        under a different name).
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+        ).isoformat()
+        cur = self._conn.execute(
+            "DELETE FROM directives WHERE consumed_at IS NULL AND created_at < ?",
+            (cutoff,),
+        )
+        return cur.rowcount
 
 
 # ---------------------------------------------------------------------------

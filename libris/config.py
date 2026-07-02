@@ -107,6 +107,17 @@ class MultiPartConfig:
 
 
 @dataclass
+class ApiConfig:
+    """Directive API — lets an external tool (e.g. Librarr) pre-register a
+    metadata match for an incoming file so the pipeline skips its own
+    Google Books / OpenLibrary / DDG lookups. Off by default (fail closed):
+    both enabled=True AND a non-empty api_key are required to serve requests.
+    """
+    enabled: bool = False
+    api_key: str = ""
+
+
+@dataclass
 class NtfyConfig:
     topic: str = ""
     base_url: str = "https://ntfy.sh"
@@ -127,6 +138,7 @@ class Config:
     output: OutputConfig
     ntfy: NtfyConfig
     multipart: MultiPartConfig = field(default_factory=MultiPartConfig)
+    api: ApiConfig = field(default_factory=ApiConfig)
     log_level: str = "INFO"
 
 
@@ -292,6 +304,13 @@ def load_config(config_path: Path) -> Config:
     if log_level.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         raise ConfigError(f"Invalid log_level: {log_level!r}")
 
+    # ---- api (directive API — off by default) ----
+    api_raw = raw.get("api", {})
+    api = ApiConfig(
+        enabled=_bool_env("LIBRIS_API_ENABLED", api_raw.get("enabled", False)),
+        api_key=os.environ.get("LIBRIS_API_KEY") or api_raw.get("api_key", ""),
+    )
+
     return Config(
         watcher=watcher,
         paths=paths,
@@ -300,6 +319,7 @@ def load_config(config_path: Path) -> Config:
         output=output,
         ntfy=ntfy,
         multipart=multipart,
+        api=api,
         log_level=log_level.upper(),
     )
 

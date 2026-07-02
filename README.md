@@ -54,6 +54,7 @@ Your files             Libris                   Calibre DB         Reader App
 - **Interactive rematch** — re-query metadata APIs from the terminal with live score breakdowns
 - **Web search fallback** — if both APIs return no results, DuckDuckGo Instant Answers is queried for author/ISBN hints and the search is retried automatically
 - **Multi-part audiobooks** — parts held in staging until the complete set arrives, then combined into one M4B with chapter markers and imported automatically
+- **Directive API** — external tools (e.g. Librarr) can pre-register a metadata match for an incoming file via a small authenticated HTTP API, so Libris skips its own metadata lookups for that file (off by default; see [Directive API](#directive-api--external-tools-can-pre-register-a-match))
 - **Push notifications** — ntfy.sh alerts when files need attention
 - **Audiobook support** — converts to M4B, combines multi-part files with chapter markers
 - **Ebook support** — converts any format to EPUB via Calibre's ebook-convert
@@ -372,6 +373,52 @@ multipart:
   timeout_hours: 48   # default; set to 0 to disable automatic escalation
 ```
 
+### Directive API — external tools can pre-register a match
+
+An external tool (e.g. [Librarr](https://github.com/markbyrne/librarr)) can call Libris's HTTP API to **pre-register the correct metadata match** for a file it's about to drop into `incoming_dir`. When that file arrives, Libris looks up the directive by filename and, if found, imports with the directed metadata instead of running its own Google Books / OpenLibrary / DuckDuckGo lookups. If no directive exists, behaviour is unchanged — Libris falls back to its normal matching.
+
+The API is **disabled by default** (fails closed): both `api.enabled: true` **and** a non-empty `api.api_key` are required before any request is served. Every request must carry a matching `X-Api-Key` header.
+
+```yaml
+api:
+  enabled: true
+  api_key: "a-long-random-shared-secret"
+```
+
+Or via environment variables:
+
+```bash
+LIBRIS_API_ENABLED=true
+LIBRIS_API_KEY=a-long-random-shared-secret
+```
+
+**`GET /api/v1/ping`** — health check (used by Librarr's "Test connection" button):
+
+```bash
+curl -H "X-Api-Key: a-long-random-shared-secret" http://localhost:8000/api/v1/ping
+# {"ok": true, "version": "0.3.18.dev3"}
+```
+
+**`POST /api/v1/directives`** — register a match for a filename that will (or already did) land in `incoming_dir`. `filename` must be a bare basename (no path separators) and matches the file's *original* incoming name — Libris keys the lookup on that name even if conversion or multi-part staging later renames the on-disk file:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/directives \
+  -H "X-Api-Key: a-long-random-shared-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "filename": "dune.epub",
+        "title": "Dune",
+        "author": "Frank Herbert",
+        "isbn": "9780441013593",
+        "year": 1965,
+        "media_type": "ebook",
+        "source": "librarr"
+      }'
+# {"id": "…", "status": "registered"}
+```
+
+A second directive posted for the same filename supersedes the first (newest wins). Unconsumed directives older than 48 hours are purged automatically during the daemon's periodic incoming-directory scan.
+
 ### Environment variable overrides
 
 Any config value can be overridden with a `LIBRIS_` prefixed environment variable:
@@ -381,6 +428,8 @@ LIBRIS_CALIBRE_MODE=docker
 LIBRIS_METADATA_CONFIDENCE_THRESHOLD=0.80
 LIBRIS_NTFY_TOPIC=my-topic
 LIBRIS_MULTIPART_TIMEOUT_HOURS=24
+LIBRIS_API_ENABLED=true
+LIBRIS_API_KEY=a-long-random-shared-secret
 ```
 
 ---

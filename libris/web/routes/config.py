@@ -110,6 +110,10 @@ async def config_save(request: Request):
         "multipart": {
             "timeout_hours": _float("multipart.timeout_hours", 48.0),
         },
+        "api": {
+            "enabled": _bool("api.enabled"),
+            "api_key": _get("api.api_key"),
+        },
         "log_level": _get("log_level", "INFO"),
     }
 

@@ -73,6 +73,7 @@ def _make_pipeline(tmp_path: Path):
     pipeline._calibre = MagicMock()
     pipeline._calibre.add_book.return_value = 102
     pipeline._store = MagicMock()
+    pipeline._store.find_directive.return_value = None
     return pipeline
 
 
