@@ -17,10 +17,12 @@ def create_app(config_path: Path):
 
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
+    from .routes import api_v1
     from .routes import config as config_routes
     from .routes import queues as queue_routes
 
     app.include_router(config_routes.router)
     app.include_router(queue_routes.router)
+    app.include_router(api_v1.router)
 
     return app

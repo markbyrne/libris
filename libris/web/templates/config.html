@@ -249,6 +249,17 @@
                     hint="Hours to wait for missing parts before escalating to review.") }}
     </section>
 
+    <!-- Directive API -->
+    <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <h2 class="text-xs font-bold uppercase tracking-wide text-gray-500">Directive API</h2>
+      </div>
+      {{ check_row("api.enabled", config.api.enabled, "enabled",
+                   hint="Lets an external tool (e.g. Librarr) pre-register a metadata match for an incoming file via /api/v1/directives. Off by default.") }}
+      {{ text_row("api.api_key", config.api.api_key, "api_key",
+                  hint="Required in the X-Api-Key header on every request. Leave blank to keep the API rejecting all requests even if enabled.") }}
+    </section>
+
     <!-- Log level -->
     <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">

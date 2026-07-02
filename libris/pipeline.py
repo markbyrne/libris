@@ -93,6 +93,25 @@ def _deserialize_candidate(blob: str) -> ScoredCandidate:
     )
 
 
+def _result_from_directive(row) -> MetadataResult:
+    """Build a pre-resolved MetadataResult from a `directives` row.
+
+    Mirrors _deserialize_candidate's field shape (the directive API stores
+    metadata_json in the same shape as _serialize_candidate output) so a
+    directive is just a pre-resolved ScoredCandidate entering the same
+    downstream machinery as an API-resolved match — above_threshold=True,
+    confidence taken from the directive.
+    """
+    scored = _deserialize_candidate(row["metadata_json"])
+    query = SearchQuery(clean_title=scored.candidate.title)
+    return MetadataResult(
+        query=query,
+        best=scored,
+        all_candidates=[scored],
+        above_threshold=True,
+    )
+
+
 def _apply_metadata_to_record(record: FileRecord, result: MetadataResult) -> None:
     """Write all matched-metadata fields from a MetadataResult onto a FileRecord."""
     record.matched_title = result.title
@@ -977,10 +996,17 @@ class Pipeline:
     ) -> FileRecord:
         """Resolve metadata, embed tags, and import to Calibre."""
         # ── Metadata ──────────────────────────────────────────────────
-        result = resolve_metadata(
-            m4b_path.stem,
-            self.config.metadata,
-        )
+        # Directive check first, keyed on record.original_path's basename —
+        # the ORIGINAL incoming filename, set once before conversion to M4B
+        # or multi-part staging could rename the on-disk file. If found,
+        # skip resolve_metadata entirely — no Google Books / OpenLibrary /
+        # DDG calls.
+        result = self._check_directive(Path(record.original_path).name)
+        if result is None:
+            result = resolve_metadata(
+                m4b_path.stem,
+                self.config.metadata,
+            )
         record.matched_title = result.title
         record.matched_author = result.author
         record.confidence = result.confidence
@@ -1076,10 +1102,18 @@ class Pipeline:
             )
 
         # ── Metadata lookup ───────────────────────────────────────────
-        result = resolve_metadata(
-            book_path.stem,
-            self.config.metadata,
-        )
+        # Directive check first: an external tool (e.g. Librarr) may have
+        # pre-registered a match for this file under its ORIGINAL incoming
+        # basename (record.original_path — set once, before any format
+        # conversion above may have renamed/staged book_path). If found,
+        # skip resolve_metadata entirely — no Google Books / OpenLibrary /
+        # DDG calls.
+        result = self._check_directive(Path(record.original_path).name)
+        if result is None:
+            result = resolve_metadata(
+                book_path.stem,
+                self.config.metadata,
+            )
         record.matched_title = result.title
         record.matched_author = result.author
         record.confidence = result.confidence
@@ -1187,6 +1221,50 @@ class Pipeline:
         self._store.upsert(record)
         self._notifier.send_error_alert(record, error)
         return record
+
+    def _check_directive(self, original_filename: str) -> MetadataResult | None:
+        """Look up a directive keyed on the ORIGINAL incoming basename.
+
+        Matching is keyed on the basename the external tool wrote into
+        incoming_dir — record.original_path, set once in _make_record at
+        first sight of the file — NOT on any later staged/converted/renamed
+        filename, since conversion (ebook format conversion, audio-to-M4B,
+        multi-part staging) can change the on-disk name before _process_*
+        gets to call resolve_metadata.
+
+        Returns a pre-resolved MetadataResult (above_threshold=True) and
+        marks the directive consumed, or None if no directive matches.
+        """
+        row = self._store.find_directive(original_filename)
+        if row is None:
+            return None
+        result = _result_from_directive(row)
+        self._store.mark_directive_consumed(row["id"])
+        log.info(
+            "pipeline.directive_match",
+            extra={
+                "filename": original_filename,
+                "source": row["source"],
+                "title": result.title,
+            },
+        )
+        log.info("directive match from %s: %s", row["source"], result.title)
+
+        # Best-effort cover download — same helper resolve_metadata uses.
+        cover_url = result.best.candidate.cover_url if result.best else None
+        if cover_url and self.config.output.embed_cover_art and not self.config.metadata.mock_mode:
+            import httpx
+
+            from ._constants import HTTP_TIMEOUT_API
+            from .metadata.base import USER_AGENT
+            from .metadata.resolver import _download_cover
+            try:
+                with httpx.Client(timeout=HTTP_TIMEOUT_API, headers={"User-Agent": USER_AGENT}) as client:
+                    result.cover_path = _download_cover(cover_url, client)
+            except Exception:
+                log.warning("pipeline.directive_cover_failed", extra={"url": cover_url})
+
+        return result
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1450,6 +1528,10 @@ class Pipeline:
         anything already in IMPORTED, PROCESSING, or PENDING_PARTS state.
         Hidden files (dot-prefixed) are ignored.
         """
+        purged = self._store.purge_stale_directives(48)
+        if purged:
+            log.info("pipeline.directives_purged", extra={"count": purged})
+
         incoming = self.config.watcher.incoming_dir
         try:
             entries = sorted(
