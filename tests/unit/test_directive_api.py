@@ -11,6 +11,11 @@ import textwrap
 from pathlib import Path
 
 import pytest
+
+# The web UI/API is an optional extra (pip install pylibris[web]) — skip this
+# module cleanly when fastapi isn't installed instead of failing collection.
+pytest.importorskip("fastapi")
+
 from fastapi.testclient import TestClient
 
 from libris.web import create_app

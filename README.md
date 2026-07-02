@@ -116,8 +116,9 @@ pip install .
 
 For development (editable install with test dependencies):
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,web]"
 ```
+The `web` extra is required to run the full test suite (the web UI and directive-API tests skip themselves when `fastapi` isn't installed).
 
 ---
 
