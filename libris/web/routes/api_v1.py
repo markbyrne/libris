@@ -1,7 +1,9 @@
 """Directive API — lets an external tool (e.g. Librarr) pre-register the
 correct metadata match for an incoming file, so the pipeline skips its own
 Google Books / OpenLibrary / DDG lookups and imports with the directed
-metadata instead.
+metadata instead. Also exposes GET /api/v1/config so a tool like Librarr can
+auto-detect Libris's incoming_dir/state_db/review_dir instead of the user
+hand-typing paths from another machine.
 
 Security posture: disabled by default (config.api.enabled must be True AND
 config.api.api_key must be non-empty) — fails closed. Every route requires
@@ -99,6 +101,29 @@ def ping(request: Request, x_api_key: str | None = Header(default=None)):
     if err:
         return err
     return {"ok": True, "version": __version__}
+
+
+@router.get("/config")
+def get_config(request: Request, x_api_key: str | None = Header(default=None)):
+    """Expose the paths Librarr needs to auto-detect its own settings
+    (incoming_dir/state_db) instead of the user hand-typing them from
+    another machine.
+    """
+    from ... import __version__
+    from ...config import load_config
+
+    err = _check_auth(request, x_api_key)
+    if err:
+        return err
+
+    config_path = request.app.state.config_path
+    cfg = load_config(config_path)
+    return {
+        "incoming_dir": str(cfg.watcher.incoming_dir),
+        "state_db": str(cfg.paths.state_db),
+        "review_dir": str(cfg.paths.review_dir),
+        "version": __version__,
+    }
 
 
 @router.post("/directives", status_code=201)

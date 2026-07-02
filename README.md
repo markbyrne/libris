@@ -400,6 +400,14 @@ curl -H "X-Api-Key: a-long-random-shared-secret" http://localhost:8000/api/v1/pi
 # {"ok": true, "version": "0.3.18.dev3"}
 ```
 
+**`GET /api/v1/config`** — lets Librarr auto-detect the paths it needs (`incoming_dir`, `state_db`) instead of the user hand-typing them from another machine:
+
+```bash
+curl -H "X-Api-Key: a-long-random-shared-secret" http://localhost:8000/api/v1/config
+# {"incoming_dir": "/home/user/incoming", "state_db": "/home/user/.libris/state.db",
+#  "review_dir": "/home/user/review", "version": "0.4.0"}
+```
+
 **`POST /api/v1/directives`** — register a match for a filename that will (or already did) land in `incoming_dir`. `filename` must be a bare basename (no path separators) and matches the file's *original* incoming name — Libris keys the lookup on that name even if conversion or multi-part staging later renames the on-disk file:
 
 ```bash
