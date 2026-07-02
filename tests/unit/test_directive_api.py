@@ -119,6 +119,33 @@ class TestPing:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/config
+# ---------------------------------------------------------------------------
+
+class TestConfig:
+    def test_missing_key_401(self, client):
+        r = client.get("/api/v1/config")
+        assert r.status_code == 401
+
+    def test_wrong_key_401(self, client):
+        r = client.get("/api/v1/config", headers={"X-Api-Key": "wrong"})
+        assert r.status_code == 401
+
+    def test_disabled_403(self, disabled_client):
+        r = disabled_client.get("/api/v1/config", headers={"X-Api-Key": API_KEY})
+        assert r.status_code == 403
+
+    def test_happy_path(self, client, tmp_path):
+        r = client.get("/api/v1/config", headers={"X-Api-Key": API_KEY})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["incoming_dir"] == str(tmp_path / "incoming")
+        assert body["state_db"] == str(tmp_path / "state.db")
+        assert body["review_dir"] == str(tmp_path / "review")
+        assert "version" in body and body["version"]
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/directives
 # ---------------------------------------------------------------------------
 
