@@ -606,15 +606,27 @@ class Pipeline:
         record: FileRecord,
         part_num: int,
         total_parts: int | None,
+        group_key: str | None = None,
     ) -> FileRecord:
         """Stage a single part file and combine+import when the set is complete.
 
         Non-M4B parts (e.g. MP3, M4A) are converted to M4B before staging so
         that combine_parts can always stream-copy homogeneous AAC input.
+
+        ``part_num``/``total_parts`` are always honored as passed — callers
+        (e.g. ``import_file_list``) may supply explicit part numbers that
+        don't come from filename parsing.
+
+        ``group_key``: when provided, used verbatim instead of the
+        stem-derived key below. This lets a caller group files whose
+        filenames don't share a common stem (e.g. an API-driven import where
+        the caller already knows which files belong together). Default None
+        preserves the exact stem-derived behaviour for the daemon/watcher path.
         """
-        # Build stable group key: clean title with part marker stripped
-        stripped_stem = strip_part_marker(path.stem)
-        group_key = (clean_query(stripped_stem) or stripped_stem).lower().strip()
+        if group_key is None:
+            # Build stable group key: clean title with part marker stripped
+            stripped_stem = strip_part_marker(path.stem)
+            group_key = (clean_query(stripped_stem) or stripped_stem).lower().strip()
 
         pending_dir = self.config.paths.staging_dir / "pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
@@ -985,6 +997,93 @@ class Pipeline:
             )
 
         # last_record is always set: audio_files is non-empty (checked above)
+        assert last_record is not None
+        return last_record
+
+    # ------------------------------------------------------------------
+    # Explicit file-list import — public API
+    # ------------------------------------------------------------------
+
+    def import_file_list(self, paths: list[Path]) -> FileRecord:
+        """Import an explicit, caller-supplied list of files as one book.
+
+        This is the seam for API-driven imports (a future endpoint will
+        expose this over HTTP): unlike :meth:`process_file` or
+        :meth:`import_directory_combined`, the files here are not discovered
+        by watching or scanning a directory — the caller (e.g. Librarr)
+        already knows exactly which files make up one book and passes them
+        explicitly. The files may live OUTSIDE ``config.watcher.incoming_dir``
+        entirely, e.g. in another tool's own landing/download folder.
+
+        Every downstream outcome (imported / duplicate / review / failed)
+        removes or relocates the INPUT file per existing pipeline semantics
+        (see ``_mark_imported``, ``_mark_review``, ``_mark_failed``,
+        ``_combine_pending_group``) — exactly as it already does for
+        watcher- and directory-driven imports. A caller that passes a
+        hardlink rather than the original file is unaffected: only the
+        supplied link is removed/moved, any other links to the same inode
+        are untouched.
+
+        Args:
+            paths: The files that make up one book. A single path is a
+                complete book (ebook or single-file audiobook). Multiple
+                paths are treated as sequential parts of one multi-part
+                audiobook — the caller guarantees they are all audio files;
+                mixed ebook+audio or non-audio multi-file lists are rejected.
+
+        Returns:
+            The :class:`~libris.state.FileRecord` for the imported (or
+            combined) file. For multi-part input this is the record keyed
+            on ``paths[0]`` — the surviving primary record after combine
+            (see ``_combine_pending_group``), so callers can poll state by
+            ``paths[0]``'s basename.
+
+        Raises:
+            ValueError: If *paths* is empty, or if more than one path is
+                given and any of them is not an audio file.
+        """
+        if not paths:
+            raise ValueError("import_file_list requires at least one path")
+
+        if len(paths) == 1:
+            return self.process_file(paths[0])
+
+        # n > 1: caller guarantees these are all parts of one audiobook.
+        for p in paths:
+            ext = p.suffix.lstrip(".").lower()
+            if ext not in audio_conv.AUDIO_EXTENSIONS:
+                raise ValueError(
+                    f"import_file_list: multi-file import requires all-audio "
+                    f"input, got non-audio file {p.name}"
+                )
+
+        total_parts = len(paths)
+        # Stable group key derived once from paths[0] — the same
+        # clean_query/strip-part-marker helpers import_directory_combined
+        # uses, so mismatched stems across the other parts don't matter.
+        stripped_stem = strip_part_marker(paths[0].stem)
+        group_key = (clean_query(stripped_stem) or stripped_stem).lower().strip()
+
+        log.info(
+            "pipeline.audio.import_file_list",
+            extra={"primary": paths[0].name, "parts": total_parts, "group": group_key},
+        )
+
+        last_record: FileRecord | None = None
+        for idx, audio_path in enumerate(paths, start=1):
+            file_record = self._get_or_create_record(audio_path, "audiobook")
+            file_record.state = FileState.PROCESSING
+            self._store.upsert(file_record)
+
+            last_record = self._handle_pending_part(
+                audio_path,
+                file_record,
+                part_num=idx,
+                total_parts=total_parts,
+                group_key=group_key,
+            )
+
+        # last_record is always set: paths is non-empty (len(paths) > 1 here)
         assert last_record is not None
         return last_record
 
