@@ -1243,7 +1243,7 @@ class Pipeline:
         log.info(
             "pipeline.directive_match",
             extra={
-                "filename": original_filename,
+                "incoming_filename": original_filename,
                 "source": row["source"],
                 "title": result.title,
             },

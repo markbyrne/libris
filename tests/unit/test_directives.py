@@ -40,10 +40,24 @@ class TestDirectiveCRUD:
     def test_find_missing_returns_none(self, store):
         assert store.find_directive("nonexistent.epub") is None
 
-    def test_consumed_directive_not_found(self, store):
+    def test_consumed_directive_still_matches(self, store):
+        """Behavior change: find_directive matches regardless of consumed_at.
+
+        A directive is marked consumed as soon as the pipeline looks it up
+        (for observability), before the import actually completes. If the
+        pipeline crashes between "mark consumed" and "import done", the next
+        startup's orphan-reprocess must still be able to match this
+        directive — otherwise the file falls back to weak Google/OpenLibrary
+        resolution and the directive's intended metadata is lost forever.
+        Directives are idempotent by filename+metadata, so re-matching an
+        already-consumed row is safe.
+        """
         store.add_directive("d1", "dune.epub", _meta(), source="librarr", confidence=1.0)
         store.mark_directive_consumed("d1")
-        assert store.find_directive("dune.epub") is None
+        row = store.find_directive("dune.epub")
+        assert row is not None
+        assert row["id"] == "d1"
+        assert row["consumed_at"] is not None
 
     def test_supersede_newest_wins(self, store):
         """A second directive for the same filename replaces the first."""
@@ -103,8 +117,13 @@ class TestPurgeStaleDirectives:
         assert store.find_directive("older.epub") is None
 
     def test_purge_ignores_consumed(self, store):
-        """Consumed directives are already invisible to find_directive; purge
-        should not error on them and should count them if old enough."""
+        """purge_stale_directives only sweeps unconsumed rows (consumed_at IS
+        NULL) — it must not touch consumed directives, since find_directive
+        now matches consumed rows too (crash-safety) and a stray purge of a
+        recently-consumed row would just be silent data loss with no
+        upside. Old, already-matched directives are harmless to keep; they
+        cost one row each and are never orphaned like unconsumed ones can
+        be."""
         old_time = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
         store._conn.execute(
             "INSERT INTO directives (id, filename, metadata_json, source, confidence, created_at, consumed_at) "
@@ -114,3 +133,7 @@ class TestPurgeStaleDirectives:
         # consumed_at IS NOT NULL -> purge query (which filters consumed_at IS NULL) skips it
         count = store.purge_stale_directives(older_than_hours=48)
         assert count == 0
+        # And it's still findable afterwards — purge didn't touch it.
+        row = store.find_directive("done.epub")
+        assert row is not None
+        assert row["id"] == "consumed1"

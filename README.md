@@ -428,6 +428,8 @@ curl -X POST http://localhost:8000/api/v1/directives \
 
 A second directive posted for the same filename supersedes the first (newest wins). Unconsumed directives older than 48 hours are purged automatically during the daemon's periodic incoming-directory scan.
 
+**Crash-safety / reprocess-safe matching:** a directive is marked consumed as soon as it's matched, before the import finishes — but directive lookups match **regardless of consumed state**. If the daemon crashes or is killed between the match and the import completing, the next startup's orphan-reprocess pass will still find and reuse the same directive instead of falling back to a weak Google Books/OpenLibrary guess. Directives are idempotent by filename, so re-matching an already-consumed one is safe. Consumed directives are otherwise inert (they don't block a fresh `POST` for the same filename) and are not swept by the 48h purge, which only targets unconsumed rows.
+
 ### Environment variable overrides
 
 Any config value can be overridden with a `LIBRIS_` prefixed environment variable:
