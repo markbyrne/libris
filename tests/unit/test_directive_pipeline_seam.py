@@ -9,6 +9,7 @@ behaviour is unchanged (resolve_metadata IS called, as before).
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -95,8 +96,11 @@ class TestEbookDirectiveSeam:
         assert record.state.value == "imported"
         pipeline._calibre.add_book.assert_called_once()
 
-        # Directive consumed — gone from the store.
-        assert pipeline._store.find_directive("dune.epub") is None
+        # Directive marked consumed, but still matchable (crash-safety) —
+        # find_directive intentionally ignores consumed_at.
+        row = pipeline._store.find_directive("dune.epub")
+        assert row is not None
+        assert row["consumed_at"] is not None
 
     def test_no_directive_calls_resolve_metadata_unchanged(self, tmp_path):
         """Regression: without a directive, resolve_metadata IS called (old behaviour)."""
@@ -123,9 +127,19 @@ class TestEbookDirectiveSeam:
         mock_resolve.assert_called_once()
         assert record.state.value == "review"
 
-    def test_directive_consumed_second_file_falls_back(self, tmp_path):
-        """After a directive is consumed, a second identically-named file
-        (re-processed) falls back to normal metadata resolution."""
+    def test_directive_consumed_second_file_still_matches(self, tmp_path):
+        """Behavior change (crash-safety): after a directive is consumed, a
+        second identically-named file (e.g. a crash-triggered orphan
+        reprocess, or genuinely a re-drop of the same filename) STILL
+        matches the consumed directive and skips resolve_metadata.
+
+        Directives are idempotent by filename+metadata, so re-matching a
+        consumed directive is safe and is exactly what makes the pipeline
+        crash-safe: if the process dies between marking a directive
+        consumed and finishing the import, the next startup's
+        orphan-reprocess must still find the same directive rather than
+        falling back to weak Google/OpenLibrary resolution.
+        """
         cfg = _make_config(tmp_path)
         cfg.watcher.incoming_dir.mkdir(parents=True, exist_ok=True)
 
@@ -146,17 +160,16 @@ class TestEbookDirectiveSeam:
         mock_resolve.assert_not_called()
 
         # Successful import already deleted the source file. Second file,
-        # same basename, different content/mtime → new record.
+        # same basename, different content/mtime → still matches the
+        # (consumed) directive, still skips resolve_metadata.
         book2 = cfg.watcher.incoming_dir / "dune.epub"
         book2.write_bytes(b"fake epub 2 - different content and mtime")
 
-        from libris.metadata.base import MetadataResult, SearchQuery
-        fake_result = MetadataResult(
-            query=SearchQuery(clean_title="dune"), best=None, above_threshold=False,
-        )
-        with patch("libris.pipeline.resolve_metadata", return_value=fake_result) as mock_resolve2:
-            pipeline.process_file(book2)
-        mock_resolve2.assert_called_once()
+        with patch("libris.pipeline.resolve_metadata") as mock_resolve2:
+            record2 = pipeline.process_file(book2)
+        mock_resolve2.assert_not_called()
+        assert record2.matched_title == "Dune"
+        assert record2.state.value == "imported"
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +201,11 @@ class TestAudiobookDirectiveSeam:
         mock_tag.embed_metadata.assert_called_once()
         assert record.matched_title == "Dune"
         assert record.state.value == "imported"
-        assert pipeline._store.find_directive("dune.m4b") is None
+        # Directive marked consumed, but still matchable (crash-safety) —
+        # find_directive intentionally ignores consumed_at.
+        row = pipeline._store.find_directive("dune.m4b")
+        assert row is not None
+        assert row["consumed_at"] is not None
 
     def test_no_directive_calls_resolve_metadata_unchanged(self, tmp_path):
         cfg = _make_config(tmp_path)
@@ -211,3 +228,53 @@ class TestAudiobookDirectiveSeam:
 
         mock_resolve.assert_called_once()
         assert record.state.value == "review"
+
+
+# ---------------------------------------------------------------------------
+# Real logging path — no mocking of `log`.
+#
+# Regression test for the live crash: log.info("pipeline.directive_match",
+# extra={"filename": ...}) raised KeyError("Attempt to overwrite 'filename'
+# in LogRecord") because `filename` is a reserved LogRecord attribute name.
+# The existing seam tests above never caught this because they run at the
+# default logging level (WARNING) with no handler attached to the
+# `libris.pipeline` logger, so `Logger.info()` short-circuits on
+# `isEnabledFor(INFO)` and never reaches `makeRecord()` — the `extra=` dict
+# is never even inspected. caplog.at_level(INFO, "libris.pipeline") forces
+# the logger's effective level down to INFO so the real makeRecord() path
+# actually runs, the same as it does in production.
+# ---------------------------------------------------------------------------
+
+class TestDirectiveMatchLoggingIsReal:
+    def test_directive_match_logs_without_crashing(self, tmp_path, caplog):
+        """This test must NOT mock `log` in any way — it exists to prove the
+        actual logging call in _check_directive is safe. Before the fix,
+        this test crashed with KeyError("Attempt to overwrite 'filename' in
+        LogRecord") the same way the production daemon did."""
+        cfg = _make_config(tmp_path)
+        cfg.watcher.incoming_dir.mkdir(parents=True, exist_ok=True)
+
+        pipeline = Pipeline(cfg)
+        pipeline._calibre = MagicMock()
+        pipeline._calibre.search.return_value = []
+        pipeline._calibre.add_book.return_value = 42
+
+        book = cfg.watcher.incoming_dir / "dune.epub"
+        book.write_bytes(b"fake epub")
+
+        pipeline._store.add_directive(
+            "dir1", "dune.epub", _directive_metadata(), source="librarr", confidence=0.95,
+        )
+
+        with caplog.at_level(logging.INFO, logger="libris.pipeline"):
+            record = pipeline.process_file(book)
+
+        assert record.state.value == "imported"
+        messages = [r.message for r in caplog.records if r.name == "libris.pipeline"]
+        assert any("pipeline.directive_match" in m for m in messages)
+        # The reserved-key collision would have raised before this point —
+        # reaching here at all is the regression check. Also confirm the
+        # renamed field made it onto the record without colliding.
+        directive_records = [r for r in caplog.records if r.getMessage() == "pipeline.directive_match"]
+        assert len(directive_records) == 1
+        assert directive_records[0].incoming_filename == "dune.epub"

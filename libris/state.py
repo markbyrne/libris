@@ -382,9 +382,22 @@ class StateStore:
         )
 
     def find_directive(self, filename: str) -> sqlite3.Row | None:
-        """Return the newest unconsumed directive for *filename*, or None."""
+        """Return the newest directive for *filename*, consumed or not.
+
+        Directives are matched regardless of consumed_at on purpose: a crash
+        between "mark consumed" and "import completes" (e.g. the pipeline
+        dying right after the match log line, before the file is actually
+        imported) must not orphan the file to weak Google/OpenLibrary
+        resolution on the next startup's orphan-reprocess pass. Directives
+        are idempotent by filename+metadata, so re-matching an
+        already-consumed directive is safe and gives the same result as the
+        first attempt. add_directive()'s supersede-on-duplicate-filename
+        behaviour still handles the case where a newer directive replaces an
+        older one, and purge_stale_directives() still bounds how long an
+        unconsumed directive can live before being swept away.
+        """
         return self._conn.execute(
-            "SELECT * FROM directives WHERE filename = ? AND consumed_at IS NULL "
+            "SELECT * FROM directives WHERE filename = ? "
             "ORDER BY created_at DESC LIMIT 1",
             (filename,),
         ).fetchone()
