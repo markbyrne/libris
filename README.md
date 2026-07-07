@@ -430,6 +430,8 @@ A second directive posted for the same filename supersedes the first (newest win
 
 **Crash-safety / reprocess-safe matching:** a directive is marked consumed as soon as it's matched, before the import finishes — but directive lookups match **regardless of consumed state**. If the daemon crashes or is killed between the match and the import completing, the next startup's orphan-reprocess pass will still find and reuse the same directive instead of falling back to a weak Google Books/OpenLibrary guess. Directives are idempotent by filename, so re-matching an already-consumed one is safe. Consumed directives are otherwise inert (they don't block a fresh `POST` for the same filename) and are not swept by the 48h purge, which only targets unconsumed rows.
 
+**Explicit file-list imports (internal seam):** internally, `Pipeline.import_file_list()` lets a caller hand the pipeline an explicit list of files — which may live outside `incoming_dir` entirely — plus, for multi-part audiobooks, an explicit part grouping instead of relying on filename-based part detection. This is groundwork for a future HTTP endpoint that will let external tools (e.g. Librarr) drive an import directly rather than dropping files into `incoming_dir` for the watcher to discover. Not yet exposed over the API — that's a later phase.
+
 ### Environment variable overrides
 
 Any config value can be overridden with a `LIBRIS_` prefixed environment variable:
