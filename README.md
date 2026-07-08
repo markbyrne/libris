@@ -430,7 +430,28 @@ A second directive posted for the same filename supersedes the first (newest win
 
 **Crash-safety / reprocess-safe matching:** a directive is marked consumed as soon as it's matched, before the import finishes — but directive lookups match **regardless of consumed state**. If the daemon crashes or is killed between the match and the import completing, the next startup's orphan-reprocess pass will still find and reuse the same directive instead of falling back to a weak Google Books/OpenLibrary guess. Directives are idempotent by filename, so re-matching an already-consumed one is safe. Consumed directives are otherwise inert (they don't block a fresh `POST` for the same filename) and are not swept by the 48h purge, which only targets unconsumed rows.
 
-**Explicit file-list imports (internal seam):** internally, `Pipeline.import_file_list()` lets a caller hand the pipeline an explicit list of files — which may live outside `incoming_dir` entirely — plus, for multi-part audiobooks, an explicit part grouping instead of relying on filename-based part detection. This is groundwork for a future HTTP endpoint that will let external tools (e.g. Librarr) drive an import directly rather than dropping files into `incoming_dir` for the watcher to discover. Not yet exposed over the API — that's a later phase.
+**`POST /api/v1/imports`** — direct import: a caller that already has files on disk (in Libris's view, which may be outside `incoming_dir` entirely) and already knows the correct metadata hands them straight to the pipeline, skipping the watcher and Libris's own Google Books / OpenLibrary / DuckDuckGo lookups entirely. `files` is `1..n` absolute paths, **primary file first**. A single path is a complete book (ebook or single-file audiobook). More than one path means all of them **must be audio files** — they're treated as sequential parts of one multi-part audiobook and combined, exactly like `Pipeline.import_file_list()` (the same seam this endpoint calls). Every path must be absolute, exist, be a regular file (not a directory or symlink), and have a supported ebook/audio extension. `metadata.title` is the only required metadata field; `metadata.media_type` must be `ebook` or `audiobook`; `metadata.isbn`, if present, must be 10–13 digits (hyphens allowed):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/imports \
+  -H "X-Api-Key: a-long-random-shared-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "files": ["/data/librarr-landing/dune.epub"],
+        "metadata": {
+          "title": "Dune",
+          "author": "Frank Herbert",
+          "isbn": "9780441013593",
+          "year": 1965,
+          "media_type": "ebook"
+        },
+        "source": "librarr",
+        "confidence": 1.0
+      }'
+# {"id": "…", "status": "accepted"}
+```
+
+The response is **always 202, immediately** — a `FileRecord` is created (or reused) for the primary file (`files[0]`) synchronously so the returned `id` is real and pollers (e.g. `GET /api/v1/files`) see a row right away, but the actual import runs in a background task *after* the response is sent. A directive is registered under the hood (keyed on `basename(files[0])`) using the same metadata shape `POST /api/v1/directives` builds, so the import picks up the posted metadata through the same crash-safe directive-matching path described above. Concurrent API-driven imports are serialized internally (one import runs at a time); an import that raises an exception is logged and never crashes the request — the pre-created record is left for the daemon's normal orphan/poll-timeout handling to pick up on its next pass.
 
 ### Environment variable overrides
 
