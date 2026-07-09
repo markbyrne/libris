@@ -470,6 +470,49 @@ class TestFormatAuthors:
 
 
 # ---------------------------------------------------------------------------
+# _metadata_flags pubdate handling
+# ---------------------------------------------------------------------------
+
+class TestMetadataFlagsPubdate:
+    """calibredb leaves pubdate at the 0101-01-01 sentinel unless --field
+    pubdate is set explicitly. result.year is free-form text, so only
+    plausible 3-4 digit numeric years may be forwarded."""
+
+    def _make_result(self, year):
+        result = MagicMock()
+        result.title = "Dune"
+        result.best.candidate.authors = ["Frank Herbert"]
+        result.publisher = None
+        result.description = None
+        result.language = None
+        result.isbn = None
+        result.series = None
+        result.series_index = None
+        result.year = year
+        return result
+
+    def test_pubdate_present_for_valid_year(self):
+        from libris.calibre.local import _metadata_flags
+
+        flags = [f for pair in _metadata_flags(self._make_result("2001")) for f in pair]
+        assert "pubdate:2001-01-01" in flags
+
+    def test_pubdate_absent_when_year_empty(self):
+        """Unknown year (result.year == '') must not force a fake pubdate."""
+        from libris.calibre.local import _metadata_flags
+
+        flags = [f for pair in _metadata_flags(self._make_result("")) for f in pair]
+        assert not any(f.startswith("pubdate:") for f in flags)
+
+    def test_pubdate_absent_for_garbage_year(self):
+        """Non-numeric or malformed year strings never reach calibredb as pubdate."""
+        from libris.calibre.local import _metadata_flags
+
+        flags = [f for pair in _metadata_flags(self._make_result("not-a-year")) for f in pair]
+        assert not any(f.startswith("pubdate:") for f in flags)
+
+
+# ---------------------------------------------------------------------------
 # set_metadata split-mode directory sync
 # ---------------------------------------------------------------------------
 

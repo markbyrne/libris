@@ -173,6 +173,66 @@ class TestEbookDirectiveSeam:
 
 
 # ---------------------------------------------------------------------------
+# Full metadata chain: directive -> MetadataResult -> calibredb --field flags
+# ---------------------------------------------------------------------------
+
+class TestDirectiveMetadataFlagsChain:
+    """Pins the full chain the direct-import API relies on: a directive
+    carrying series/series_index/published_year must survive
+    _result_from_directive and reach set_metadata as a MetadataResult whose
+    _metadata_flags() output includes series, series_index, AND pubdate.
+    """
+
+    def test_directive_round_trip_emits_series_and_pubdate_flags(self, tmp_path):
+        from libris.calibre.local import _metadata_flags
+
+        cfg = _make_config(tmp_path)
+        cfg.watcher.incoming_dir.mkdir(parents=True, exist_ok=True)
+
+        pipeline = Pipeline(cfg)
+        pipeline._calibre = MagicMock()
+        pipeline._calibre.search.return_value = []
+        pipeline._calibre.add_book.return_value = 42
+
+        book = cfg.watcher.incoming_dir / "dune.epub"
+        book.write_bytes(b"fake epub")
+
+        metadata = json.dumps({
+            "title": "Dune",
+            "authors": ["Frank Herbert"],
+            "isbn_13": "9780441013593",
+            "isbn_10": None,
+            "published_year": 1965,
+            "publisher": "Ace",
+            "description": None,
+            "language": "en",
+            "series": "Dune",
+            "series_index": 1,
+            "cover_url": None,
+            "categories": [],
+            "source": "librarr",
+            "confidence": 0.95,
+            "score_breakdown": {},
+        })
+        pipeline._store.add_directive(
+            "dir1", "dune.epub", metadata, source="librarr", confidence=0.95,
+        )
+
+        with patch("libris.pipeline.resolve_metadata") as mock_resolve:
+            record = pipeline.process_file(book)
+        mock_resolve.assert_not_called()
+        assert record.state.value == "imported"
+
+        pipeline._calibre.set_metadata.assert_called_once()
+        result = pipeline._calibre.set_metadata.call_args.args[1]
+
+        flags = [f for pair in _metadata_flags(result) for f in pair]
+        assert "series:Dune" in flags
+        assert "series_index:1" in flags
+        assert "pubdate:1965-01-01" in flags
+
+
+# ---------------------------------------------------------------------------
 # Audiobook seam
 # ---------------------------------------------------------------------------
 

@@ -627,6 +627,10 @@ def _metadata_flags(result: MetadataResult) -> list[list[str]]:
         flags.append(["--field", f"series:{result.series}"])
     if result.series_index is not None:
         flags.append(["--field", f"series_index:{result.series_index}"])
+    # calibredb leaves pubdate at the 0101-01-01 sentinel unless set explicitly —
+    # guard against non-numeric/garbage years since result.year is free-form text.
+    if result.year and result.year.isdigit() and 3 <= len(result.year) <= 4:
+        flags.append(["--field", f"pubdate:{result.year}-01-01"])
     return flags
 
 

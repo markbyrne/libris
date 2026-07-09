@@ -1650,6 +1650,14 @@ If you already have duplicates from before this fix, use `libris revert-import` 
 
 ---
 
+### Published date shows as empty (calibre-web) or year "0101" (Audiobookshelf)
+
+`calibredb add` leaves a book's `pubdate` at Calibre's undefined-date sentinel (`0101-01-01`) unless told otherwise — calibre-web renders that as a blank published date, and Audiobookshelf (which reads `pubdate` from Calibre's `metadata.opf`) renders it as the year "0101".
+
+Fixed: `set_metadata` now includes `--field pubdate:{year}-01-01` whenever the resolved metadata carries a plausible (3-4 digit numeric) published year. Books imported without a resolvable year keep calibredb's default behaviour — no fake date is forced. Already-imported books are unaffected; re-run `set_metadata` (or re-import) to backfill the correct date.
+
+---
+
 ### `import-one` says "refusing to import symlink"
 
 Libris rejects symlinks in the incoming directory as a security measure — a symlink could point to arbitrary files on the host. Copy the actual file instead of symlinking it.
