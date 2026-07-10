@@ -81,6 +81,9 @@
         <span>⏳</span> Pending
         {% if counts.pending %}<span class="badge badge-amber">{{ counts.pending }}</span>{% endif %}
       </a>
+      <a href="/logs" class="nav-link {{ 'active' if active_page == 'logs' else '' }}">
+        <span>📜</span> Logs
+      </a>
     </nav>
     <div class="p-3 border-t border-gray-100">
       <div class="text-xs text-gray-400 truncate" title="{{ config_file }}">{{ config_file }}</div>
