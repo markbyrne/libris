@@ -1698,6 +1698,14 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ---
 
+## v0.5.4
+
+### Added: Logs view in the web dashboard
+
+A **Logs** tab in libris-web shows recent log records (time, level, logger, message) straight from the browser — no SSH or journald access needed. Backed by an in-process ring buffer (last 1000 records), with level (INFO/WARNING/ERROR) and text filters and 5-second auto-refresh.
+
+---
+
 ## v0.5.3
 
 ### Changed: import notifications, legal hardening, and cleanup
