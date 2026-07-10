@@ -15,11 +15,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ..classifier import AUDIO_EXTENSIONS
 from ..exceptions import ConversionError
 
 log = logging.getLogger(__name__)
-
-AUDIO_EXTENSIONS = frozenset({"mp3", "m4a", "m4b", "flac", "ogg", "aac", "opus", "wav"})
 
 
 # ---------------------------------------------------------------------------

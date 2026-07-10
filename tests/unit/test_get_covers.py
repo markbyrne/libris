@@ -224,6 +224,7 @@ class TestCoverAlwaysSaved:
         pipeline._calibre.add_book.return_value = 1
         pipeline._store = MagicMock()
         pipeline._store.find_directive.return_value = None
+        pipeline._notifier = MagicMock()
         return pipeline
 
     def _make_result(self, cover_path):

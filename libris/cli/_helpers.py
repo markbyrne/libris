@@ -23,11 +23,6 @@ def _has_match(record: FileRecord) -> bool:
     return record.matched_metadata_json is not None
 
 
-def _hyperlink(url: str, text: str) -> str:
-    """Wrap text in an OSC 8 terminal hyperlink (iTerm2, Terminal, Warp, etc.)."""
-    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
-
-
 def _fmt_age(delta: timedelta) -> str:
     """Format a timedelta as a human-readable age string, e.g. '2d 4h', '3h 12m', '45m'."""
     total = int(delta.total_seconds())

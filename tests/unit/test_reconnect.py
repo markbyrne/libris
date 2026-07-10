@@ -71,6 +71,7 @@ class TestMarkImportedNotifies:
         pipeline = Pipeline.__new__(Pipeline)
         pipeline.config = cfg
         pipeline._store = MagicMock()
+        pipeline._notifier = MagicMock()
         return pipeline
 
     def _make_record(self, tmp_path):

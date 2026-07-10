@@ -19,7 +19,7 @@ The key difference from a simple import script: Libris scores each metadata matc
 
 Works with local Calibre installations and with [calibre-web](https://github.com/janeczku/calibre-web) running in Docker. Works with anything that places files in a watched folder — purchase downloads, Humble Bundle exports, library-management tools, or plain `cp`.
 
-> **Content responsibility:** Libris organizes and imports files you already have. You are responsible for ensuring you have the legal right to the content you process with it.
+> **Content responsibility:** Libris is a local file-organization and metadata tool. It does not search for, download, or provide access to any content — it only processes files already present on your filesystem. Libris does not seek out, endorse, or facilitate access to unauthorized or infringing copies of copyrighted works. You are solely responsible for ensuring you have the legal right to any file you place in its watched folder, and for complying with copyright law in your jurisdiction. See the [Legal](#legal) section.
 
 ---
 
@@ -1778,6 +1778,20 @@ Requires: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `aiofile
 If Libris saved your library some chaos, you can support development:
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F6A4219OBI) [![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/markbyrne)
+
+---
+
+## Legal
+
+Libris is a local file-organization and metadata-matching tool. It does not search for, host, or distribute copyrighted content, and does not seek out or facilitate access to unauthorized copies. You are solely responsible for ensuring you have the legal right to any file you process with Libris, and for complying with applicable copyright law in your jurisdiction.
+
+Libris contacts third-party metadata providers — [Google Books](https://developers.google.com/books/terms) and [OpenLibrary](https://openlibrary.org/developers) (a project of the Internet Archive; bibliographic data is CC0) — and, when both return no match, [DuckDuckGo Instant Answers](https://duckduckgo.com/api). Use of each API is subject to that provider's own terms of service.
+
+Libris invokes Calibre's `calibredb`/`ebook-convert` and `ffmpeg` as external command-line tools; it does not bundle, link against, or redistribute either. You must install and license Calibre and ffmpeg yourself, subject to their own license terms (Calibre is GPLv3; ffmpeg's license depends on your build configuration).
+
+Libris is an independent, community project and is not affiliated with, endorsed by, or sponsored by Calibre, calibre-web, Audiobookshelf, Google, DuckDuckGo, or any other third-party project or service it integrates with. All product names, logos, and trademarks are the property of their respective owners.
+
+The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE). The authors make no representation that any particular use of this software is lawful.
 
 ---
 

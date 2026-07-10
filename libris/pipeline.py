@@ -1286,6 +1286,9 @@ class Pipeline:
 
         record.state = FileState.IMPORTED
         self._store.upsert(record)
+        # Low-priority ntfy ping on successful import (Notifier is a no-op when
+        # notifications are disabled or no topic is configured).
+        self._notifier.send_imported_alert(record, result)
         # Tell calibre-web to reopen its DB connection (no-op when unset)
         notify_reconnect(self.config.calibre.reconnect_url)
         return record
