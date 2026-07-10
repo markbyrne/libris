@@ -20,7 +20,7 @@ from pathlib import Path
 from ..config import CalibreConfig
 from ..exceptions import CalibreImportError, ConversionError
 from ..metadata.base import MetadataResult
-from .base import CalibreBackend
+from .base import CalibreBackend, format_authors
 from .local import (
     _BOOK_EXTENSIONS,
     _metadata_flags,
@@ -250,6 +250,22 @@ class DockerCalibre(CalibreBackend):
             log.warning("calibre.docker.list_books_parse_error", extra={"stdout": result.stdout[:200]})
             return []
         return [_normalise_book_entry(b) for b in raw]
+
+    def set_authors(self, book_id: int, authors: list[str]) -> bool:
+        if book_id < 0:
+            return False
+        cmd = [
+            "docker", "exec", self._container,
+            "calibredb", "set_metadata", str(book_id),
+            "--field", f"authors:{format_authors(authors)}",
+        ]
+        log.debug("calibre.docker.set_authors", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.docker.set_authors_failed", extra={"stderr": result.stderr})
+            return False
+        log.info("calibre.docker.authors_set", extra={"book_id": book_id, "authors": authors})
+        return True
 
     def convert_ebook(self, input_path: Path, output_path: Path) -> None:
         container_input = self._translate(input_path)

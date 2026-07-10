@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -18,6 +19,48 @@ def format_authors(authors: list[str]) -> str:
     single inverted name ("Surname, Given").
     """
     return " & ".join(authors)
+
+
+def _normalize_author_key(name: str) -> str:
+    """Case/whitespace-insensitive key for comparing author name spellings.
+
+    "D. J. MacHale" and "D.J. MacHale" collapse to the same key so the
+    author-merge endpoint can treat them as the same person even though
+    Calibre stores them as distinct literal strings.
+    """
+    return re.sub(r"\s+", "", name).strip().lower()
+
+
+def _replace_author_tokens(
+    authors: list[str], from_names: list[str], to_name: str
+) -> list[str] | None:
+    """Replace any author token matching (case/space-insensitively) a
+    from_name with to_name, preserving co-authors and de-duplicating.
+
+    Returns the new author list, or None if nothing would change (the book
+    has no from_name token — makes the merge idempotent: re-running it is a
+    no-op for books already renamed).
+    """
+    from_keys = {_normalize_author_key(n) for n in from_names}
+    replaced = [
+        to_name if (_normalize_author_key(a) in from_keys and a != to_name) else a
+        for a in authors
+    ]
+
+    # De-dupe while preserving order — e.g. "A & D. J. MacHale & D.J. MacHale"
+    # (already partially merged) collapses to "A & D.J. MacHale".
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for a in replaced:
+        key = _normalize_author_key(a)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(a)
+
+    if deduped == authors:
+        return None
+    return deduped
 
 
 def notify_reconnect(url: str | None) -> None:
@@ -194,3 +237,91 @@ class CalibreBackend(ABC):
         Returns an empty list on any error.
         """
         ...
+
+    @abstractmethod
+    def set_authors(self, book_id: int, authors: list[str]) -> bool:
+        """Overwrite the authors field of an existing Calibre record.
+
+        Unlike set_metadata (which pushes a full MetadataResult), this only
+        touches the authors field — used by merge_authors() to rewrite a
+        book's author list in place without disturbing title/series/etc.
+
+        Args:
+            book_id: Calibre book ID.
+            authors: Full replacement author list, in order.
+
+        Returns:
+            True if calibredb accepted the change, False on any failure.
+            Failures are logged, never raised.
+        """
+        ...
+
+    def merge_authors(self, from_names: list[str], to_name: str) -> int:
+        """Rename every book authored by any name in from_names to to_name.
+
+        Concrete (non-abstract) so LocalCalibre and DockerCalibre share one
+        implementation built on the abstract search/list_books/set_authors
+        primitives — no per-backend duplication needed.
+
+        For each from_name, uses search() (authors:"<name>" — a contains
+        match, the same style _find_calibre_duplicates uses) to collect
+        candidate book ids, then list_books() to read each candidate's
+        current author list and _replace_author_tokens() to compute the
+        rewritten list, preserving co-authors and de-duplicating.
+
+        Best-effort per book: a search or set_authors failure is logged and
+        that book is skipped, never raised. Idempotent — a book already
+        bearing only to_name has no from_name token left, so a second call
+        is a no-op for it (and, once every match is renamed, for the whole
+        library).
+
+        Returns the number of books actually renamed.
+        """
+        from_names = [n.strip() for n in from_names if n and n.strip()]
+        to_name = (to_name or "").strip()
+        if not to_name or not from_names:
+            return 0
+
+        candidate_ids: set[int] = set()
+        for name in from_names:
+            safe = name.replace('"', '\\"')
+            try:
+                candidate_ids.update(self.search(f'authors:"{safe}"'))
+            except Exception as exc:
+                log.warning(
+                    "calibre.merge_authors_search_failed",
+                    extra={"author_name": name, "error": str(exc)},
+                )
+        if not candidate_ids:
+            return 0
+
+        try:
+            authors_by_id = {b["id"]: b["authors"] for b in self.list_books()}
+        except Exception as exc:
+            log.warning("calibre.merge_authors_list_failed: %s", exc)
+            return 0
+
+        renamed = 0
+        for book_id in candidate_ids:
+            authors = authors_by_id.get(book_id)
+            if not authors:
+                continue
+            new_authors = _replace_author_tokens(authors, from_names, to_name)
+            if new_authors is None:
+                continue  # already correct — idempotent no-op
+            try:
+                ok = self.set_authors(book_id, new_authors)
+            except Exception as exc:
+                log.warning(
+                    "calibre.merge_authors_set_failed",
+                    extra={"book_id": book_id, "error": str(exc)},
+                )
+                continue
+            if ok:
+                renamed += 1
+            else:
+                log.warning(
+                    "calibre.merge_authors_set_not_applied",
+                    extra={"book_id": book_id},
+                )
+        return renamed
