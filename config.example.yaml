@@ -28,7 +28,13 @@ calibre:
   mode: local
 
   # --- local mode ---
-  library_path: ~/Calibre Library
+  # Directory containing metadata.db (the Calibre library root).
+  # (The legacy key `library_path` is still accepted as an alias.)
+  library_db_path: ~/Calibre Library
+
+  # Optional: where physical book files live, if you use calibre-web's
+  # "Separate Book Files from Library" feature. Defaults to library_db_path.
+  # book_file_path: ~/Calibre Book Files
 
   # --- calibre-web coexistence (recommended if calibre-web shares this library) ---
   # Ping calibre-web's /reconnect endpoint after every import/removal so it
@@ -60,6 +66,12 @@ metadata:
   # Useful for testing the pipeline without hitting real APIs.
   mock_mode: false
 
+  # What to do when an incoming book already exists in the Calibre library:
+  #   review — move the duplicate to review/ for a manual decision (default)
+  #   skip   — discard the incoming duplicate
+  #   import — import it anyway (Calibre keeps both)
+  duplicate_action: review
+
 output:
   # Preferred ebook format for import: epub | mobi
   preferred_ebook_format: epub
@@ -88,5 +100,17 @@ ntfy:
   enabled: true
   # Optional Bearer token for private ntfy channels
   # auth_token: your_token_here
+
+multipart:
+  # Multi-part audiobooks: after this many hours with an incomplete set of
+  # parts, escalate them to review/ so you can force-combine or keep waiting.
+  timeout_hours: 48
+
+api:
+  # Directive API — lets an external tool (e.g. Librarr) pre-register a
+  # metadata match for an incoming file so the pipeline skips its own lookups.
+  # Fail-closed: BOTH enabled: true AND a non-empty api_key are required.
+  enabled: false
+  api_key: ""
 
 log_level: INFO   # DEBUG | INFO | WARNING | ERROR

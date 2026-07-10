@@ -169,19 +169,19 @@ _WORD_ORDINALS: dict[str, int] = {
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
     "nineteen": 19, "twenty": 20,
 }
-# Known trailing attribution or source-tag strings in structured filenames.
-# These are consumed so they never end up in title/author.
-_ATTRIBUTION_STRINGS: frozenset[str] = frozenset({
-    "anna's archive",
-    "z-library",
-    "zlibrary",
-    "libgen",
-    "library genesis",
-    "sci-hub",
+# Trailing source/attribution tags occasionally appended to structured
+# filenames by third-party file-sharing or export tools. They are noise for
+# metadata matching and are consumed so they never end up in title/author.
+# Extend with whatever generic noise tokens you observe in practice; do not
+# encode specific platform brand names here.
+_KNOWN_NOISE_TOKENS: frozenset[str] = frozenset({
+    "source archive",
+    "ebook source",
+    "file source",
 })
 
 
-def _aa_undot(s: str) -> str:
+def _undot_initials(s: str) -> str:
     """Reverse the dot→underscore encoding used in structured filename conventions for name fields.
 
     The convention replaces dots with underscores in author initials and adds a
@@ -224,11 +224,11 @@ def parse_double_dash(stem: str) -> DoubleDashResult | None:
     - Hex hash fields (MD5/SHA-1/SHA-256) are consumed silently.
     - Bare four-digit year fields are consumed as the year.
     - ``isbn13``/``isbn10`` prefixed fields are consumed as the ISBN.
-    - Known attribution strings (``anna's archive``, ``z-library`` …) are
+    - Known generic noise/attribution tokens (see ``_KNOWN_NOISE_TOKENS``) are
       consumed silently.
     - The title field is checked for ``{Series}_ Book {N}, {Title}`` and
       split into series/series_index/title when found.
-    - The author field has AA dot→underscore encoding reversed
+    - The author field has its dot→underscore initial encoding reversed
       (``D_ J_`` → ``D.J.``) then split on the first comma: the part before
       the comma is the author; anything after is stored as narrator (common
       for audiobook filenames which list narrator after the author).
@@ -243,7 +243,7 @@ def parse_double_dash(stem: str) -> DoubleDashResult | None:
     for f in fields:
         if _HEX_HASH_FIELD.match(f):
             continue
-        if f.lower() in _ATTRIBUTION_STRINGS:
+        if f.lower() in _KNOWN_NOISE_TOKENS:
             continue
         m_isbn = _ISBN_FIELD.match(f)
         if m_isbn:
@@ -276,7 +276,7 @@ def parse_double_dash(stem: str) -> DoubleDashResult | None:
     author: str | None = None
     narrator: str | None = None
     if raw_author:
-        raw_author = _aa_undot(raw_author)
+        raw_author = _undot_initials(raw_author)
         if ", " in raw_author:
             author, narrator = raw_author.split(", ", 1)
             narrator = narrator.strip() or None

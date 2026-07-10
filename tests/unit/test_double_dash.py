@@ -1,16 +1,16 @@
-"""Tests for the shadow-library ' -- ' filename convention.
+"""Tests for the ' -- ' structured double-dash filename convention.
 
-Archives such as Anna's Archive name files
+Some third-party file-sharing/export tools name files
 ``{title} -- {author} -- {year} -- {publisher} -- {md5}.ext``.
 parse_double_dash extracts structured fields; the resolver uses them as
 authoritative title/author/year/isbn/series instead of whole-stem heuristics.
 
 Five improvements tested here (in addition to the original contract):
-1. Underscore-as-dot: AA encodes "D.J." as "D_ J_" — reversed on output.
+1. Underscore-as-dot: the convention encodes "D.J." as "D_ J_" — reversed on output.
 2. Narrator split: "Author, Narrator" in the author field → author + narrator.
 3. isbn13/isbn10 field: "isbn13 9781416914204" → isbn key in result.
 4. Series+ordinal from title: "Series_ Book N, Title" → series/series_index/title.
-5. Attribution strings: "Anna's Archive" field consumed silently.
+5. Noise tokens: a trailing generic source/attribution token consumed silently.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ PENDRAGON_STEM = (
     " -- 2011 -- Aladdin; 1"
     " -- isbn13 9781416914204"
     " -- 3fbea2dba0b00fb15c6bd81f7183cfa5"
-    " -- Anna's Archive"
+    " -- source archive"
 )
 
 
@@ -222,17 +222,16 @@ class TestSeriesExtraction:
 
 
 # ---------------------------------------------------------------------------
-# Improvement 5 — Attribution strings consumed silently
+# Improvement 5 — Generic noise/attribution tokens consumed silently
 # ---------------------------------------------------------------------------
 
-class TestAttributionStrings:
+class TestNoiseTokens:
     @pytest.mark.parametrize("attribution", [
-        "Anna's Archive",
-        "Z-Library",
-        "Zlibrary",
-        "Libgen",
-        "Library Genesis",
-        "Sci-Hub",
+        "source archive",
+        "ebook source",
+        "file source",
+        # case-insensitive match
+        "Source Archive",
     ])
     def test_attribution_consumed(self, attribution):
         parsed = parse_double_dash(
@@ -262,9 +261,9 @@ class TestPendragonIntegration:
     def test_attribution_and_hash_not_in_result(self):
         parsed = parse_double_dash(PENDRAGON_STEM)
         assert parsed is not None
-        # Anna's Archive and the MD5 hash must not appear anywhere
+        # the trailing source token and the MD5 hash must not appear anywhere
         result_str = str(parsed)
-        assert "Anna" not in result_str
+        assert "source archive" not in result_str
         assert "3fbea2" not in result_str
 
 

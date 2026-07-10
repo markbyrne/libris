@@ -82,6 +82,7 @@ def _make_pipeline(cfg, tmp_path=None):
     pipeline._calibre = mock_cal
     pipeline._store = MagicMock()
     pipeline._store.find_directive.return_value = None
+    pipeline._notifier = MagicMock()
     return pipeline
 
 
