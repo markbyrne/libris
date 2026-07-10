@@ -1770,6 +1770,12 @@ libris web --config /path/to/config.yaml --host 0.0.0.0 --port 9000
 - Actions update the table row inline via HTMX; no full-page reload required
 - Greyed-out Accept button indicates no metadata match yet — use `libris rematch --id N` then refresh
 
+**Logs view:**
+- **Logs tab** — recent log records (time, level, logger, message) captured in-process via a bounded ring buffer, so you can debug from the browser without SSH/journald access
+- **Level filter** (All/INFO/WARNING/ERROR, at-or-above threshold) and a text search box over logger name + message
+- Auto-refreshes every 5 seconds via HTMX; newest records first; ERROR rows highlighted red, WARNING amber
+- In-memory only — holds the last ~1000 records and resets on process restart; does not read from journald or any log file
+
 Combine-parts actions for the pending queue are planned for a future phase.
 
 Requires: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `aiofiles` (all installed with `pip install pylibris[web]`).

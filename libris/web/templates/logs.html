@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Logs — Libris{% endblock %}
+{% block content %}
+<div class="max-w-5xl">
+  <div class="flex items-center gap-4 mb-5">
+    <h1 class="text-xl font-bold">Logs</h1>
+    <span class="bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-0.5 rounded-full">{{ records|length }}</span>
+  </div>
+
+  <div id="log-filters" class="flex items-center gap-2 mb-4">
+    <select name="level" id="level-select" class="border border-gray-300 rounded-md text-xs px-2 py-1.5">
+      <option value="" {{ 'selected' if not level else '' }}>All levels</option>
+      <option value="INFO" {{ 'selected' if level == 'INFO' else '' }}>INFO</option>
+      <option value="WARNING" {{ 'selected' if level == 'WARNING' else '' }}>WARNING</option>
+      <option value="ERROR" {{ 'selected' if level == 'ERROR' else '' }}>ERROR</option>
+    </select>
+    <input type="text" name="q" id="search-input" value="{{ q }}" placeholder="Search message or logger…"
+           class="border border-gray-300 rounded-md text-xs px-2 py-1.5 flex-1">
+    <button type="button" class="btn btn-ghost btn-sm"
+            hx-get="/logs/rows" hx-include="#log-filters" hx-target="#log-rows" hx-swap="innerHTML">
+      Refresh
+    </button>
+  </div>
+
+  <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <table class="queue w-full">
+      <thead>
+        <tr>
+          <th class="w-40">Time</th>
+          <th class="w-20">Level</th>
+          <th class="w-40">Logger</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody id="log-rows"
+             hx-get="/logs/rows"
+             hx-include="#log-filters"
+             hx-trigger="every 5s, change from:#level-select, keyup changed delay:300ms from:#search-input"
+             hx-swap="innerHTML">
+        {% include "partials/log_rows.html" %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200 text-xs text-gray-500">
+    <span class="font-semibold">Tip:</span>
+    This view shows recent in-memory log records for this process — it resets on restart
+    and does not read from journald or disk.
+  </div>
+</div>
+{% endblock %}
