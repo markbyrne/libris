@@ -453,6 +453,21 @@ curl -X POST http://localhost:8000/api/v1/imports \
 
 The response is **always 202, immediately** — a `FileRecord` is created (or reused) for the primary file (`files[0]`) synchronously so the returned `id` is real and pollers (e.g. `GET /api/v1/files`) see a row right away, but the actual import runs in a background task *after* the response is sent. A directive is registered under the hood (keyed on `basename(files[0])`) using the same metadata shape `POST /api/v1/directives` builds, so the import picks up the posted metadata through the same crash-safe directive-matching path described above. Concurrent API-driven imports are serialized internally (one import runs at a time); an import that raises an exception is logged and never crashes the request — the pre-created record is left for the daemon's normal orphan/poll-timeout handling to pick up on its next pass.
 
+**`POST /api/v1/authors/merge`** — consolidates duplicate author name spellings already in Calibre (e.g. Librarr noticing "D. J. MacHale" and "D.J. MacHale" are the same person) into one canonical name. Every book currently authored by any name in `from_names` is renamed to `to_name` via `calibredb set_metadata`; Calibre then moves those books into a single author folder on its own. Multi-author books keep their co-authors — only the matching author token is replaced. `from_names` may harmlessly include `to_name`. 422 if `to_name` is empty or `from_names` is empty:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/authors/merge \
+  -H "X-Api-Key: a-long-random-shared-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "from_names": ["D. J. MacHale", "D.J. MacHale"],
+        "to_name": "D.J. MacHale"
+      }'
+# {"renamed": 3, "to_name": "D.J. MacHale"}
+```
+
+The rename is best-effort per book (a failure on one book is logged and skipped, never aborts the rest) and idempotent — running the same request again renames 0 books once every match already has `to_name`. Libris does not delete or merge author records directly; Calibre garbage-collects an author once it has zero books left.
+
 ### Environment variable overrides
 
 Any config value can be overridden with a `LIBRIS_` prefixed environment variable:

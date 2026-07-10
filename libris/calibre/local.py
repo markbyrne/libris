@@ -288,6 +288,34 @@ class LocalCalibre(CalibreBackend):
         if split_mode:
             self._sync_book_files_dir(book_id, old_rel)
 
+    def set_authors(self, book_id: int, authors: list[str]) -> bool:
+        if book_id < 0:
+            return False
+
+        # Same split-library rename-sync dance as set_metadata: changing
+        # authors moves the book under a new Author/ directory in Calibre's
+        # scheme, so the physical files (already relocated to _book_files)
+        # must follow the same way set_metadata's title/author changes do.
+        split_mode = self._book_files != self._library
+        old_rel = self._book_rel_dir(book_id) if split_mode else None
+
+        cmd = [
+            "calibredb", "set_metadata", str(book_id),
+            "--field", f"authors:{format_authors(authors)}",
+            "--with-library", str(self._library),
+        ]
+        log.debug("calibre.local.set_authors", extra={"cmd": cmd})
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning("calibre.local.set_authors_failed", extra={"stderr": result.stderr})
+            return False
+
+        if split_mode:
+            self._sync_book_files_dir(book_id, old_rel)
+
+        log.info("calibre.local.authors_set", extra={"book_id": book_id, "authors": authors})
+        return True
+
     def _book_rel_dir(self, book_id: int) -> Path | None:
         """The book's directory relative to _library, as calibredb's DB reports it.
 

@@ -186,6 +186,30 @@ class ImportIn(BaseModel):
         return v
 
 
+class AuthorMergeIn(BaseModel):
+    """POST /api/v1/authors/merge body — consolidates duplicate author name
+    spellings (e.g. "D. J. MacHale" + "D.J. MacHale") into one canonical
+    name, so Calibre moves every affected book into a single author folder.
+    """
+
+    from_names: list[str]
+    to_name: str
+
+    @field_validator("to_name")
+    @classmethod
+    def _to_name_non_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("to_name must be non-empty")
+        return v
+
+    @field_validator("from_names")
+    @classmethod
+    def _from_names_non_empty(cls, v: list[str]) -> list[str]:
+        if not v or not any(n and n.strip() for n in v):
+            raise ValueError("from_names must be non-empty")
+        return v
+
+
 def _check_auth(request: Request, x_api_key: str | None) -> JSONResponse | None:
     """Return an error JSONResponse if auth fails, else None."""
     from ...config import load_config
@@ -434,3 +458,36 @@ def get_file(
         "matched_isbn": record.matched_isbn,
         "calibre_book_id": record.calibre_book_id,
     }
+
+
+@router.post("/authors/merge")
+async def merge_authors(
+    request: Request, x_api_key: str | None = Header(default=None)
+):
+    """Consolidate duplicate author name spellings in Calibre so a tool like
+    Librarr can fix a mis-spelled/inconsistent author across every book that
+    used it, without the user hand-editing each record in calibre-web.
+    Renaming every from_names match to to_name makes Calibre move those
+    books into a single author folder. Best-effort per book — see
+    CalibreBackend.merge_authors for the token-replace/co-author-preserving
+    logic shared by both the local and docker calibredb backends.
+    """
+    from ...calibre import get_calibre
+    from ...config import load_config
+
+    err = _check_auth(request, x_api_key)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+        merge_in = AuthorMergeIn(**body)
+    except Exception as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    config_path = request.app.state.config_path
+    cfg = load_config(config_path)
+    calibre = get_calibre(cfg.calibre)
+    renamed = calibre.merge_authors(merge_in.from_names, merge_in.to_name)
+
+    return {"renamed": renamed, "to_name": merge_in.to_name}
