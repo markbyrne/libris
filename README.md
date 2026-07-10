@@ -1698,6 +1698,17 @@ Run `libris check-config` — it sends a test notification and reports the exact
 
 ---
 
+## v0.5.3
+
+### Changed: import notifications, legal hardening, and cleanup
+
+- Wired up the "imported successfully" ntfy notification (previously built but never called) — you now get a low-priority ping on each successful import.
+- Substantially expanded the test suite (calibre backends, directive API, watchers, a reserved-`LogRecord`-key regression guard).
+- De-branded the filename cleaner and its tests (generic noise-token handling; double-dash parsing behavior unchanged), added a README **Legal** section, and refreshed `config.example.yaml` (`duplicate_action`, `book_file_path`, `multipart`, `api`, `library_db_path`).
+- Removed dead code (`_hyperlink`, three unused exception classes) and deduplicated the `AUDIO_EXTENSIONS` constant.
+
+---
+
 ## v0.3.18 (dev)
 
 ### Fixed: audiobook duplicates marked FAILED instead of prompting
