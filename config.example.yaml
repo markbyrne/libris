@@ -8,6 +8,9 @@ watcher:
   incoming_dir: ~/books/incoming
   # How often fswatch checks for changes (macOS only, seconds)
   poll_interval_seconds: 2
+  # How often to re-scan incoming_dir for files that arrived while the
+  # daemon was offline. Also runs once at startup. Set to 0 to disable.
+  scan_interval_hours: 1
 
 paths:
   # Intermediate staging area for converted files
